@@ -86,6 +86,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     state = next
     bus.emit({ type: 'state', state: next })
     log.debug({ state: next, reason }, 'orch: state')
+    // Heartbeat gate: only fire "still working" lines while we're actually
+    // mid-task. Anything else (listening / barge-in / ended) silences it.
+    injector.setWorking(next === 'working')
   }
 
   function onRealtimeEvent(ev: RealtimeEvent): void {
@@ -122,7 +125,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             // which can be many seconds for any real task. The ack is the
             // ONLY non-executor speech in the loop (besides the opening
             // greeting); everything else originates from the executor.
-            injector.speak('On it — taking a look.')
+            //
+            // High salience so the scheduler delivers it promptly and
+            // doesn't coalesce it with anything.
+            injector.speak({
+              text: 'On it — taking a look.',
+              source: 'progress',
+              salience: 1.0,
+            })
             setState('working', 'user turn submitted to executor')
           }
         }
@@ -149,9 +159,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   function onExecutorEvent(ev: ExecutorEvent): void {
     bus.emit({ type: 'executor', event: ev })
 
+    // Pass the FULL phrase (with source + salience) to the injector — its
+    // scheduler uses both for coalescing and pacing. Raw .text would
+    // discard the signal it needs.
     const phrases = translator.ingest(ev)
     for (const phrase of phrases) {
-      injector.speak(phrase.text)
+      injector.speak(phrase)
       bus.emit({ type: 'narration-spoken', text: phrase.text })
     }
 
@@ -230,6 +243,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     await mic.close()
     await speaker.close()
     if (micPump) await micPump
+
+    // Stop the heartbeat timer + clear any unspoken phrases.
+    injector.close()
 
     setState('ended', 'orch stopped')
   }
