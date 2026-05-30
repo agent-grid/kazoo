@@ -8,7 +8,8 @@ node_modules/
 
 # build output
 dist/
-build/
+out/
+release/
 *.tsbuildinfo
 
 # logs

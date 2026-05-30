@@ -1,0 +1,41 @@
+{
+  // Shared compiler options for both leaf projects. NOT a project itself.
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+
+    // The 47 internal `../foo.ts` specifiers resolve only because
+    // electron-vite/esbuild rewrites them at bundle time. tsc tolerates them
+    // via allowImportingTsExtensions. NEVER run raw `node` against `.ts`
+    // specifiers — the build must always go through electron-vite.
+    "allowImportingTsExtensions": true,
+
+    // Load-bearing for secret isolation: forces the renderer's BusEvent /
+    // NarrationMode imports to be type-only, so no core runtime (and no
+    // secret path) can be pulled into the renderer bundle.
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    // `tsc -b` needs project references; references need composite. We don't
+    // emit JS (electron-vite does), so noEmit stays on — supported in build
+    // mode. tsBuildInfoFile is overridden per leaf to avoid collisions.
+    "composite": true,
+    "noEmit": true,
+
+    // Strictness — carried verbatim from the Bun config. If something becomes
+    // friction we file an issue, not loosen the dial.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

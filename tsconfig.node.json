@@ -1,0 +1,21 @@
+{
+  // Node/Electron side: main process, preload, the surface-agnostic core, and
+  // the shared IPC types. No DOM lib, no JSX — this code never runs in a page.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "types": ["node"],
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/node.tsbuildinfo",
+    // This project is REFERENCED by tsconfig.web.json (the renderer pulls the
+    // shared IPC types + type-only BusEvent/NarrationMode). A referenced
+    // composite project may not use `noEmit`, so we emit DECLARATIONS ONLY to
+    // a throwaway cache dir — tsc still only typechecks the real source; the
+    // actual JS bundling is electron-vite's job, never tsc's. The `.d.ts`
+    // output is never shipped.
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "./node_modules/.cache/tsc/node-types"
+  },
+  "include": ["src/main", "src/preload", "src/core", "src/shared"]
+}
