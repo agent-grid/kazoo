@@ -1,0 +1,6 @@
+# Bun runtime config. Keep minimal — defaults are good.
+# https://bun.sh/docs/runtime/bunfig
+
+[install]
+# Use saveTextLockfile so bun.lock is human-readable in PRs.
+saveTextLockfile = true
