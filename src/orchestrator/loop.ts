@@ -72,8 +72,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   let state: OrchestratorState = 'idle'
   let lastWrapUpText: string | null = null
+  let wrapUpResolver: (() => void) | null = null
   let micPump: Promise<void> | null = null
   let stopped = false
+  // Post-barge-in audio gate (B2). Set true on `speech-started`; cleared
+  // on the next `response-created`. While true we discard incoming
+  // `audio-chunk` events — they're tail bytes from the response the
+  // server-VAD just cancelled, and writing them respawns the speaker
+  // subprocess and plays the leftover audio. The user already barged in;
+  // they shouldn't hear what they interrupted.
+  let bargedIn = false
 
   function setState(next: OrchestratorState, reason: string): void {
     if (state === next) return
@@ -96,17 +104,32 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
     switch (ev.type) {
       case 'audio-chunk':
+        // Drop stale tail bytes that arrive between barge-in and the
+        // server starting our next response.
+        if (bargedIn) return
         speaker.write(base64ToInt16(ev.audio))
         return
       case 'audio-done':
         return
       case 'speech-started':
         // Barge-in. Drop everything we were about to say.
+        bargedIn = true
         void speaker.flush().catch((err: unknown) => {
           log.warn({ err: String(err) }, 'orch: speaker.flush threw')
         })
         injector.flush()
         setState('user-speaking', 'realtime speech-started')
+        return
+      case 'response-created':
+        // A fresh response started; the audio bytes that follow belong to
+        // it, not to the cancelled one. Lift the post-barge-in gate.
+        bargedIn = false
+        // Narrating: visual hint that the speaker is about to be busy with
+        // a fresh narration response. (B3 — `narrating` was previously
+        // declared but never reached.)
+        if (state === 'working' || state === 'listening') {
+          setState('narrating', 'realtime response-created')
+        }
         return
       case 'speech-stopped':
         // Server-VAD says the user is done. Realtime is configured with
@@ -139,6 +162,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return
       case 'response-done':
         injector.onResponseDone()
+        // We finished voicing a narration phrase; if we're not actively
+        // being interrupted and the executor is still chewing, fall back
+        // to 'working' until the next phrase or turn-done.
+        if (state === 'narrating') {
+          setState('working', 'realtime response-done')
+        }
         return
       case 'state':
         if (ev.state === 'active') {
@@ -149,6 +178,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return
       case 'wrap-up-text':
         lastWrapUpText = ev.text
+        wrapUpResolver?.()
+        wrapUpResolver = null
         return
       case 'error':
         log.error({ err: ev.message, code: ev.code }, 'orch: realtime error')
@@ -162,10 +193,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     // Pass the FULL phrase (with source + salience) to the injector — its
     // scheduler uses both for coalescing and pacing. Raw .text would
     // discard the signal it needs.
+    //
+    // The `narration-spoken` bus event is emitted by the injector's
+    // `onSpoken` callback (cli.tsx) AFTER a phrase actually speaks —
+    // emitting here would lie about coalesced/dropped phrases.
     const phrases = translator.ingest(ev)
     for (const phrase of phrases) {
       injector.speak(phrase)
-      bus.emit({ type: 'narration-spoken', text: phrase.text })
     }
 
     if (ev.type === 'turn-done' && ev.finalForTask) {
@@ -207,21 +241,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     setState('wrapping-up', 'orch stop called')
     log.info('orch: stopping')
 
-    // Wrap-up turn — best-effort, time-boxed. Skip cleanly if Realtime is
-    // already dead.
+    // Wrap-up turn — event-driven, time-boxed. Resolves the instant the
+    // `wrap-up-text` event lands (via wrapUpResolver wired in the realtime
+    // handler), or after an 8-second timeout if the server never replies.
+    // Skip cleanly if Realtime is already dead.
     if (realtime.state === 'active') {
       const wrapUpPrompt = deps.wrapUpPrompt ?? DEFAULT_WRAP_UP_PROMPT
-      const wrapUpReceived = new Promise<void>((resolve) => {
-        const start = Date.now()
-        const timer = setInterval(() => {
-          if (lastWrapUpText !== null || Date.now() - start > 8000) {
-            clearInterval(timer)
-            resolve()
-          }
-        }, 100)
+      const waitForWrapUp = new Promise<void>((resolve) => {
+        wrapUpResolver = resolve
+      })
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+      const timeout = new Promise<void>((resolve) => {
+        timeoutHandle = setTimeout(resolve, 8000)
+        timeoutHandle.unref?.()
       })
       realtime.requestWrapUp(wrapUpPrompt)
-      await wrapUpReceived
+      await Promise.race([waitForWrapUp, timeout])
+      wrapUpResolver = null
+      if (timeoutHandle) clearTimeout(timeoutHandle)
     }
 
     // Append to memory (best-effort — distiller is a stub today; it throws,

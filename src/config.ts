@@ -75,7 +75,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       projectMemoryPath: memory.projectMemory,
     },
     log: {
-      file: env.KAZOO_LOG_FILE || './.kazoo/log.ndjson',
+      // Default lives under ~/.kazoo so an `rm -rf .` in a workspace clone
+      // can't blow away the operator's debug history, and we don't
+      // accidentally check log files into a git repo. Override with
+      // KAZOO_LOG_FILE to put it anywhere (e.g. ./.kazoo/log.ndjson during
+      // development).
+      file: expandTilde(env.KAZOO_LOG_FILE?.trim() || '~/.kazoo/log.ndjson'),
       level: env.KAZOO_LOG_LEVEL || 'info',
     },
   }
@@ -95,11 +100,13 @@ function required(env: NodeJS.ProcessEnv, key: string): string {
 function resolveWorkspacePath(raw: string | undefined): string {
   const trimmed = raw?.trim()
   const candidate = trimmed && trimmed.length > 0 ? trimmed : '~/kazoo-workspace'
-  const expanded =
-    candidate === '~'
-      ? homedir()
-      : candidate.startsWith('~/')
-        ? `${homedir()}/${candidate.slice(2)}`
-        : candidate
-  return resolve(expanded)
+  return resolve(expandTilde(candidate))
+}
+
+/** Expand a leading `~` or `~/` against the user's home dir. Other paths
+ *  are returned unchanged. */
+function expandTilde(candidate: string): string {
+  if (candidate === '~') return homedir()
+  if (candidate.startsWith('~/')) return `${homedir()}/${candidate.slice(2)}`
+  return candidate
 }

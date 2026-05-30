@@ -21,6 +21,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import { KazooError } from '../lib/errors.ts'
 import type { Logger } from '../lib/logger.ts'
+import { trackSubprocess } from '../lib/subprocesses.ts'
 import { type AudioBackend, detectBackend } from './backend.ts'
 import { SAMPLE_RATE_HZ } from './format.ts'
 
@@ -75,6 +76,9 @@ export function createSpeaker(cfg: SpeakerConfig): Speaker {
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       proc.stdout.resume() // drain unused stdout
+      // SIGKILL on host-process exit so the player doesn't outlive Kazoo
+      // after a crash. Auto-removes itself on the natural-exit path.
+      trackSubprocess(proc)
     } catch (err) {
       throw new KazooError(
         'audio/device',

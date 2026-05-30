@@ -24,8 +24,10 @@
 //   2. HEARTBEAT. While the executor is `working` and the queue is empty
 //      and Realtime isn't speaking, if no narration has fired in ~5 s we
 //      emit a brief "still on it" line so the voice never goes dead during
-//      a long bash/build/test. One heartbeat per quiet period; cycles
-//      through variants so it doesn't repeat verbatim.
+//      a long bash/build/test. EXACTLY one heartbeat per quiet period —
+//      heartbeats are tagged distinctly and do NOT advance the
+//      `lastSpokenAt` clock the gate uses; otherwise a fired heartbeat
+//      would re-arm itself 5 s later and we'd loop forever.
 //
 // Barge-in: `flush()` drops the queue and clears the busy flag.
 // Realtime's server-VAD (`interrupt_response: true`) already cancelled
@@ -34,6 +36,14 @@
 import type { Logger } from '../lib/logger.ts'
 import type { NarrationPhrase } from '../narration/translator.ts'
 import type { RealtimeSession } from './session.ts'
+
+export type NarrationInjectorOptions = {
+  /** Fires AFTER `session.injectNarration(text)` actually runs for a
+   *  phrase that won pacing/dedup. The bus's `narration-spoken` event
+   *  uses this — emitting from inside the orchestrator's translator
+   *  loop would fire for phrases that got coalesced/dropped. */
+  onSpoken?: (text: string) => void
+}
 
 export type NarrationInjector = {
   /** Enqueue a phrase. Scheduler decides when/how to actually speak. */
@@ -73,21 +83,37 @@ const HEARTBEAT_PHRASES: readonly string[] = [
   'Still on it — hang tight.',
   'Still chewing through this…',
 ]
+/** Identity check: a phrase is one of OURS (a heartbeat we generated)
+ *  iff its text appears here AND source === 'progress'. Used to decide
+ *  whether to bump `lastSpokenAt` (heartbeats don't) and to reset the
+ *  one-per-quiet-period gate. */
+const HEARTBEAT_SET: ReadonlySet<string> = new Set(HEARTBEAT_PHRASES)
+function isHeartbeatPhrase(p: NarrationPhrase): boolean {
+  return p.source === 'progress' && HEARTBEAT_SET.has(p.text)
+}
 
-export function createQueuedInjector(session: RealtimeSession, logger: Logger): NarrationInjector {
+export function createQueuedInjector(
+  session: RealtimeSession,
+  logger: Logger,
+  opts: NarrationInjectorOptions = {},
+): NarrationInjector {
   const queue: NarrationPhrase[] = []
   // Set true between the moment we call session.injectNarration() and the
   // matching `response-done` event. Server rejects overlapping responses.
   let injecting = false
   let working = false
   let closed = false
+  // Wall-clock of the last NON-HEARTBEAT phrase that was actually spoken.
+  // Heartbeats do not advance this — otherwise a heartbeat fire would
+  // restart the 5-second window from itself and we'd heartbeat every 5 s
+  // forever (the old bug: B1).
   let lastSpokenAt = Date.now()
-  // For "don't say the same coalesced summary back-to-back".
-  let lastSpokenText = ''
-  // Marker so a single quiet period only emits one heartbeat. Reset on any
-  // non-heartbeat phrase being spoken (because lastSpokenAt advances).
-  let lastHeartbeatAt = 0
+  // True between when we enqueue a heartbeat and when a real phrase next
+  // gets through. Ensures at most one heartbeat per quiet period.
+  let heartbeatFiredInQuietPeriod = false
   let heartbeatIndex = 0
+  // Dedup the same coalesced summary back-to-back.
+  let lastSpokenText = ''
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
@@ -99,19 +125,33 @@ export function createQueuedInjector(session: RealtimeSession, logger: Logger): 
     // Dedupe identical-to-last-spoken (catches consecutive coalesces).
     if (next.text === lastSpokenText && next.source === 'tool-summary') {
       logger.debug({ text: next.text }, 'injector: suppressing duplicate coalesced phrase')
-      // Try again — there may be more behind it (though in practice the
-      // coalesce just consumed the whole low-salience run).
       tryNext()
       return
     }
     injecting = true
-    lastSpokenAt = Date.now()
+    const wasHeartbeat = isHeartbeatPhrase(next)
+    if (!wasHeartbeat) {
+      // Any REAL phrase resets the quiet period: bump lastSpokenAt so
+      // the next heartbeat must wait another HEARTBEAT_MS, and clear
+      // the once-per-period gate so the next quiet period can fire.
+      lastSpokenAt = Date.now()
+      heartbeatFiredInQuietPeriod = false
+    }
     lastSpokenText = next.text
     logger.debug(
-      { phrase: next.text.slice(0, 120), src: next.source, q: queue.length },
+      {
+        phrase: next.text.slice(0, 120),
+        src: next.source,
+        q: queue.length,
+        heartbeat: wasHeartbeat,
+      },
       'injector: speak',
     )
     session.injectNarration(next.text)
+    // Notify orchestrator (bus) AFTER the injection actually fired — fixes
+    // C2 (was previously emitted per-phrase from the translator loop,
+    // including phrases that got coalesced/dropped).
+    opts.onSpoken?.(next.text)
   }
 
   // Pull the next phrase the scheduler should actually speak.
@@ -151,14 +191,16 @@ export function createQueuedInjector(session: RealtimeSession, logger: Logger): 
   function maybeHeartbeat(): void {
     if (closed || !working || injecting) return
     if (queue.length > 0) return
-    const now = Date.now()
-    if (now - lastSpokenAt < HEARTBEAT_MS) return
-    if (lastHeartbeatAt > lastSpokenAt) return // already heartbeated this quiet period
+    if (heartbeatFiredInQuietPeriod) return
+    if (Date.now() - lastSpokenAt < HEARTBEAT_MS) return
     const text = HEARTBEAT_PHRASES[heartbeatIndex % HEARTBEAT_PHRASES.length]
     if (!text) return
     heartbeatIndex++
-    lastHeartbeatAt = now
-    queue.push({ text, source: 'progress', salience: 0.55 })
+    heartbeatFiredInQuietPeriod = true
+    // Salience 0.7 (above the high-salience threshold) so the scheduler
+    // delivers it without trying to coalesce it with anything that
+    // might race in alongside. Marked `progress` source for the bus.
+    queue.push({ text, source: 'progress', salience: 0.7 })
     tryNext()
   }
 
@@ -188,8 +230,9 @@ export function createQueuedInjector(session: RealtimeSession, logger: Logger): 
       }
       injecting = false
       lastSpokenText = ''
-      // Don't reset lastSpokenAt — heartbeat gating off lastHeartbeatAt
-      // vs lastSpokenAt is still correct.
+      // After barge-in: fresh quiet period; heartbeat can fire again.
+      heartbeatFiredInQuietPeriod = false
+      lastSpokenAt = Date.now()
     },
     onResponseDone(): void {
       injecting = false
@@ -200,7 +243,7 @@ export function createQueuedInjector(session: RealtimeSession, logger: Logger): 
       working = next
       if (next) {
         lastSpokenAt = Date.now()
-        lastHeartbeatAt = 0
+        heartbeatFiredInQuietPeriod = false
         heartbeatIndex = 0
         startHeartbeat()
       } else {
@@ -227,7 +270,9 @@ function isHigh(p: NarrationPhrase): boolean {
 
 /** Pick a single summary phrase for a run of low-salience tool actions.
  *  Crude classifier on the phrase text — translator already shaped the
- *  per-tool descriptions to be recognizable. */
+ *  per-tool descriptions to be recognizable.
+ *  TODO(perf): if the translator grows more tool types, swap this string-
+ *  matching for a phrase-kind tag carried on NarrationPhrase. */
 function coalesceRun(run: readonly NarrationPhrase[]): NarrationPhrase {
   let reads = 0
   let greps = 0

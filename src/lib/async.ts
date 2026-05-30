@@ -33,8 +33,17 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-/** Minimal bounded async queue. The audio + executor event paths use this
- *  to apply back-pressure without a heavyweight stream library. */
+/** Minimal async queue. UNBOUNDED — `push()` always enqueues, never
+ *  blocks. Don't use this where producers can outpace consumers without
+ *  back-pressure for long stretches (e.g. ingesting megabyte-sized tool
+ *  outputs into narration). For the call paths it serves today —
+ *  mic frames (20 ms; consumer always ready), executor SDK messages
+ *  (SDK paces itself), executor user-message stream (push from voice
+ *  turns, ~1/s peak) — bounded growth is in practice driven by the SDK.
+ *
+ *  TODO(perf): add an optional `maxSize` + drop-oldest / await-room
+ *  policy if a real back-pressure case shows up. Don't add it
+ *  speculatively — the right behavior is call-site-dependent. */
 export class AsyncQueue<T> {
   private readonly items: T[] = []
   private readonly waiters: Array<(value: IteratorResult<T>) => void> = []

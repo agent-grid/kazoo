@@ -20,11 +20,13 @@ export type StateTransition = {
 export const VALID_TRANSITIONS: ReadonlyArray<readonly [OrchestratorState, OrchestratorState]> = [
   ['idle', 'listening'],
   ['listening', 'user-speaking'],
+  ['listening', 'narrating'], // greeting / ack with no prior 'working'
   ['user-speaking', 'working'],
   ['user-speaking', 'listening'],
   ['working', 'narrating'],
   ['working', 'listening'],
   ['narrating', 'listening'],
+  ['narrating', 'working'], // realtime response-done while executor still busy
   ['narrating', 'user-speaking'], // barge-in
   ['working', 'user-speaking'], // barge-in
   ['listening', 'wrapping-up'],

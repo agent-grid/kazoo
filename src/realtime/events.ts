@@ -47,6 +47,14 @@ export type AudioChunkEvent = {
 /** End-of-audio marker for the current response turn. */
 export type AudioDoneEvent = { type: 'audio-done' }
 
+/** A NEW response has started streaming. Used by the orchestrator to
+ *  clear the post-barge-in audio gate: audio-chunks before this event
+ *  may be tail bytes from the response that was just interrupted, and
+ *  shouldn't be written to the speaker. */
+export type ResponseCreatedEvent = {
+  type: 'response-created'
+}
+
 /** The model finished a (non-wrap-up) response. */
 export type ResponseDoneEvent = {
   type: 'response-done'
@@ -68,6 +76,7 @@ export type RealtimeEvent =
   | CaptionEvent
   | AudioChunkEvent
   | AudioDoneEvent
+  | ResponseCreatedEvent
   | ResponseDoneEvent
   | WrapUpTextEvent
 

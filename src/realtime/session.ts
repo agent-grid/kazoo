@@ -504,7 +504,12 @@ export class RealtimeSession {
       case 'response.created':
         // Server began generating a response. Tracked so cancelResponse()
         // (and any future caller) can no-op when nothing is in flight.
+        // Also forwarded as an event so the orchestrator can clear its
+        // post-barge-in audio-write gate (audio bytes before this event
+        // can be stale tail bytes from the response that was just
+        // interrupted).
         this.responseActive = true
+        this.emit({ type: 'response-created' })
         return
 
       case 'response.done':

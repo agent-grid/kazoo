@@ -4,7 +4,9 @@
 // Stays small — wiring only; no logic. The orchestrator (./orchestrator/
 // loop.ts) owns the actual call.
 
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { resolve as resolvePath } from 'node:path'
 import { render } from 'ink'
 import { createMic, createSpeaker, detectBackend } from './audio/index.ts'
 import { loadConfig } from './config.ts'
@@ -22,6 +24,44 @@ import type { RealtimeEvent } from './realtime/events.ts'
 import { createQueuedInjector } from './realtime/inject.ts'
 import { RealtimeSession } from './realtime/session.ts'
 import { App } from './tui/App.tsx'
+
+/** Paths the workspace dir must NOT be, post-realpath. Even with the
+ *  tool-level path-scope check, scoping the workspace at `/` or the
+ *  operator's $HOME defeats the whole sandbox. */
+function assertWorkspaceSafe(workspace: string): void {
+  if (workspace === '/' || workspace === '') {
+    throw new KazooError(
+      'config/missing-env',
+      `KAZOO_WORKSPACE refuses to use the filesystem root.`,
+    )
+  }
+  const home = realpathSync(homedir())
+  const forbidden = [
+    home,
+    resolvePath(home, '.ssh'),
+    resolvePath(home, '.aws'),
+    resolvePath(home, '.kube'),
+    resolvePath(home, '.gnupg'),
+    resolvePath(home, '.config'),
+    '/etc',
+    '/var',
+    '/usr',
+    '/sys',
+    '/proc',
+    '/dev',
+    '/root',
+    '/boot',
+  ]
+  for (const bad of forbidden) {
+    if (workspace === bad) {
+      throw new KazooError(
+        'config/missing-env',
+        `KAZOO_WORKSPACE refuses to scope itself to a sensitive root (${bad}). ` +
+          `Pick a dedicated directory like ~/kazoo-workspace.`,
+      )
+    }
+  }
+}
 
 async function main(): Promise<void> {
   // 1. Config — fail-fast on missing OPENAI_API_KEY (loadConfig throws),
@@ -56,9 +96,18 @@ async function main(): Promise<void> {
   // 3. Workspace dir for the executor. Scoped OUTSIDE Kazoo's own source
   //    so a hallucinated edit can't damage the agent's codebase. Path
   //    resolved by config (defaults to ~/kazoo-workspace; override with
-  //    KAZOO_WORKSPACE). Idempotent.
-  mkdirSync(config.executor.workspace, { recursive: true })
-  logger.info({ workspace: config.executor.workspace }, 'kazoo: executor workspace ready')
+  //    KAZOO_WORKSPACE). Mode 0o700 so other users on the box can't read
+  //    work in flight. Pre-flight refuses dangerous roots (~, /, /etc,
+  //    ~/.ssh, …) — see `assertWorkspaceSafe`. After mkdir we realpath
+  //    the workspace so the runner's path-scope check operates against
+  //    the resolved canonical path, not a symlink the model could climb.
+  mkdirSync(config.executor.workspace, { recursive: true, mode: 0o700 })
+  const workspaceReal = realpathSync(config.executor.workspace)
+  assertWorkspaceSafe(workspaceReal)
+  logger.info(
+    { workspace: workspaceReal, configured: config.executor.workspace },
+    'kazoo: executor workspace ready',
+  )
 
   // 4. Audio backend — preflight check so a missing toolchain fails before
   //    we open a Realtime connection.
@@ -113,10 +162,18 @@ async function main(): Promise<void> {
     onEvent: (ev) => realtimeHandler(ev),
   })
 
-  const injector = createQueuedInjector(realtime, logger)
+  // The injector's `onSpoken` fires AFTER a phrase actually goes out to
+  // Realtime — `narration-spoken` events on the bus stay truthful even
+  // when the scheduler coalesces a burst (C2).
+  const injector = createQueuedInjector(realtime, logger, {
+    onSpoken: (text) => bus.emit({ type: 'narration-spoken', text }),
+  })
 
-  // 10. Executor — brain. Sandboxed to the configured workspace.
-  const policy = defaultPermissionPolicy(config.executor.workspace)
+  // 10. Executor — brain. Sandboxed to the RESOLVED workspace (post
+  //     realpath) so the runner's path-scope check has a stable comparison
+  //     target — a symlink swap inside the workspace can't redirect the
+  //     scope after this point.
+  const policy = defaultPermissionPolicy(workspaceReal)
   const executor = createExecutor({
     oauthToken: config.anthropic.oauthToken,
     apiKey: config.anthropic.apiKey,
