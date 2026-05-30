@@ -106,14 +106,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         setState('user-speaking', 'realtime speech-started')
         return
       case 'speech-stopped':
-        // Server-VAD says the user is done. Realtime will auto-generate an
-        // acknowledgement; we wait for the final caption to forward.
+        // Server-VAD says the user is done. Realtime is configured with
+        // `create_response: false` in narrator-only mode, so it will NOT
+        // auto-generate a response — we wait for the final caption and
+        // forward to the executor. The only voice output is whatever we
+        // explicitly inject via `injector.speak(...)`.
         return
       case 'caption':
         if (ev.role === 'user' && ev.final) {
           const text = ev.text.trim()
           if (text) {
             executor.submit(text)
+            // Instant ack — without this the user hears total silence
+            // between speaking and the first executor narration phrase,
+            // which can be many seconds for any real task. The ack is the
+            // ONLY non-executor speech in the loop (besides the opening
+            // greeting); everything else originates from the executor.
+            injector.speak('On it — taking a look.')
             setState('working', 'user turn submitted to executor')
           }
         }

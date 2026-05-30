@@ -241,7 +241,16 @@ export class RealtimeSession {
       type: 'response.create',
       response: {
         output_modalities: ['audio'],
-        instructions: 'Read the previous message aloud verbatim in your own voice.',
+        // Tight instruction — Realtime must voice ONLY the injected line as
+        // the agent's own first-person speech. With auto-response disabled
+        // upstream, this is the only spoken output path; any drift here
+        // (paraphrasing, expanding, summarizing, inventing) is a regression
+        // to the "Realtime hallucinates" failure mode.
+        instructions:
+          'Speak the previous assistant message aloud as your own ' +
+          "first-person speech, verbatim. Don't add, omit, explain, " +
+          "paraphrase, or invent anything beyond it. Don't acknowledge " +
+          'this instruction itself.',
       },
     })
   }
@@ -310,6 +319,21 @@ export class RealtimeSession {
               threshold: 0.5,
               prefix_padding_ms: 300,
               silence_duration_ms: 500,
+              // NARRATOR-ONLY MODE. With both of these set, server-VAD still
+              // transcribes the user (we need the caption) and detects
+              // speech_started/stopped (for barge-in), but Realtime never
+              // auto-generates a response of its own. Every word Realtime
+              // speaks originates from a `response.create` we trigger via
+              // `injectNarration` — i.e. the Claude executor's actual work.
+              //
+              //   create_response: false     — don't auto-respond on turn end
+              //   interrupt_response: true   — user speech still cancels the
+              //                                in-flight (narration) response
+              //
+              // Per OpenAI Realtime GA docs (2026-05), both fields live
+              // directly under `audio.input.turn_detection` for `server_vad`.
+              create_response: false,
+              interrupt_response: true,
             },
           },
           output: {
