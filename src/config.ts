@@ -2,6 +2,8 @@
 // automatically). Crashes fast on missing required keys so we never hit
 // half-initialized state.
 
+import { homedir } from 'node:os'
+import { resolve } from 'node:path'
 import { KazooError } from './lib/errors.ts'
 import { resolveMemoryPaths } from './memory/store.ts'
 
@@ -22,6 +24,10 @@ export type Config = {
   }
   executor: {
     model: string
+    /** Absolute path the executor's cwd is pinned to. Defaults to
+     *  `~/kazoo-workspace`; overridable via `KAZOO_WORKSPACE`. A leading
+     *  `~` is expanded. The directory is created on first run by cli.tsx. */
+    workspace: string
   }
   memory: {
     userMemoryPath: string
@@ -62,6 +68,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     executor: {
       model: env.KAZOO_EXECUTOR_MODEL || 'claude-sonnet-4-6',
+      workspace: resolveWorkspacePath(env.KAZOO_WORKSPACE),
     },
     memory: {
       userMemoryPath: memory.userMemory,
@@ -80,4 +87,19 @@ function required(env: NodeJS.ProcessEnv, key: string): string {
     throw new KazooError('config/missing-env', `Missing required env var ${key}`)
   }
   return v
+}
+
+/** Resolve the executor workspace path. Default: `~/kazoo-workspace`.
+ *  A leading `~` (alone or followed by `/`) is expanded to the home dir.
+ *  Other paths are resolved against the current cwd. */
+function resolveWorkspacePath(raw: string | undefined): string {
+  const trimmed = raw?.trim()
+  const candidate = trimmed && trimmed.length > 0 ? trimmed : '~/kazoo-workspace'
+  const expanded =
+    candidate === '~'
+      ? homedir()
+      : candidate.startsWith('~/')
+        ? `${homedir()}/${candidate.slice(2)}`
+        : candidate
+  return resolve(expanded)
 }

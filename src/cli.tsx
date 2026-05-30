@@ -5,8 +5,6 @@
 // loop.ts) owns the actual call.
 
 import { mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { render } from 'ink'
 import { createMic, createSpeaker, detectBackend } from './audio/index.ts'
 import { loadConfig } from './config.ts'
@@ -24,11 +22,6 @@ import type { RealtimeEvent } from './realtime/events.ts'
 import { createQueuedInjector } from './realtime/inject.ts'
 import { RealtimeSession } from './realtime/session.ts'
 import { App } from './tui/App.tsx'
-
-/** Where the executor is allowed to read and edit. Scoped OUTSIDE Kazoo's
- *  own source tree so a hallucinated edit can't damage the codebase that
- *  runs the agent. Created on first run. */
-const WORKSPACE_DIR = join(homedir(), 'kazoo-workspace')
 
 async function main(): Promise<void> {
   // 1. Config — fail-fast on missing OPENAI_API_KEY (loadConfig throws),
@@ -60,9 +53,12 @@ async function main(): Promise<void> {
     'kazoo: boot',
   )
 
-  // 3. Workspace dir for the executor. Idempotent.
-  mkdirSync(WORKSPACE_DIR, { recursive: true })
-  logger.info({ workspace: WORKSPACE_DIR }, 'kazoo: executor workspace ready')
+  // 3. Workspace dir for the executor. Scoped OUTSIDE Kazoo's own source
+  //    so a hallucinated edit can't damage the agent's codebase. Path
+  //    resolved by config (defaults to ~/kazoo-workspace; override with
+  //    KAZOO_WORKSPACE). Idempotent.
+  mkdirSync(config.executor.workspace, { recursive: true })
+  logger.info({ workspace: config.executor.workspace }, 'kazoo: executor workspace ready')
 
   // 4. Audio backend — preflight check so a missing toolchain fails before
   //    we open a Realtime connection.
@@ -119,8 +115,8 @@ async function main(): Promise<void> {
 
   const injector = createQueuedInjector(realtime, logger)
 
-  // 10. Executor — brain. Sandboxed to WORKSPACE_DIR.
-  const policy = defaultPermissionPolicy(WORKSPACE_DIR)
+  // 10. Executor — brain. Sandboxed to the configured workspace.
+  const policy = defaultPermissionPolicy(config.executor.workspace)
   const executor = createExecutor({
     oauthToken: config.anthropic.oauthToken,
     apiKey: config.anthropic.apiKey,
