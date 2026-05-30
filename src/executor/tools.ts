@@ -104,3 +104,48 @@ export function defaultPermissionPolicy(cwd: string): ExecutorPermissionPolicy {
     shellMetacharacters: SHELL_METACHARACTERS,
   }
 }
+
+/** Match a candidate bash command against the policy's allowlist.
+ *
+ *  MINIMAL FIRST CUT (flagged for security-review):
+ *   - Step 1: metachar blocklist — any character in `shellMetacharacters`
+ *     in the candidate rejects it. This is the only thing keeping us
+ *     honest about argv-prefix vs string-prefix; without it, an allowed
+ *     `ls` would let `ls; rm -rf /` through.
+ *   - Step 2: tokenize on whitespace. This is NOT a real shell tokenizer
+ *     — it doesn't understand quoting. Acceptable because step 1 already
+ *     rejected commands carrying the metachars that would matter. A
+ *     quoted-arg-with-spaces (`cat "file with space"`) still type-checks
+ *     against `cat` (argv[0] is `cat`); the extra split tokens are
+ *     ignored by the prefix match.
+ *   - Step 3: every entry's tokens must equal the candidate's leading
+ *     tokens. `ls` matches `ls -la /tmp`; `git diff` matches `git diff x`
+ *     but not `git push`. */
+export function isBashCommandAllowed(command: string, policy: ExecutorPermissionPolicy): boolean {
+  if (!command) return false
+  for (const meta of policy.shellMetacharacters) {
+    if (command.includes(meta)) return false
+  }
+  const tokens = command
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length > 0)
+  if (tokens.length === 0) return false
+  for (const entry of policy.bashAllowlist) {
+    const entryTokens = entry
+      .trim()
+      .split(/\s+/)
+      .filter((t) => t.length > 0)
+    if (entryTokens.length === 0) continue
+    if (entryTokens.length > tokens.length) continue
+    let matches = true
+    for (let i = 0; i < entryTokens.length; i++) {
+      if (entryTokens[i] !== tokens[i]) {
+        matches = false
+        break
+      }
+    }
+    if (matches) return true
+  }
+  return false
+}
