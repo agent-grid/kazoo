@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Coding Agent — Build Plan</title>
+<style>
+  :root{
+    --bg:#0b0e14; --surface:#141a24; --surface2:#1a2230; --border:#26303f;
+    --text:#c4d0e0; --head:#f0f6fc; --muted:#76839a;
+    --voice:#34d3c0;      /* teal = voice/narrator layer */
+    --exec:#a78bfa;       /* purple = executor layer */
+    --warn:#f5a623; --good:#56d364; --pink:#ff7eb6;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:radial-gradient(1200px 600px at 75% -10%,#15212e 0%,var(--bg) 55%);
+    color:var(--text); font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px; margin:0 auto; padding:48px 28px 96px}
+  header.hero{margin-bottom:40px}
+  .kicker{font:600 12px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase; color:var(--voice); margin-bottom:14px}
+  h1{font-size:40px; line-height:1.1; margin:0 0 12px; color:var(--head); letter-spacing:-.02em}
+  h1 .accent{background:linear-gradient(90deg,var(--voice),var(--exec)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+  .tagline{font-size:18px; color:var(--muted); max-width:680px}
+  .badges{display:flex; flex-wrap:wrap; gap:8px; margin-top:22px}
+  .badge{font:600 12px/1 var(--mono); padding:7px 11px; border-radius:7px; background:var(--surface2); border:1px solid var(--border); color:var(--text)}
+  .badge.v{color:var(--voice); border-color:#1d4a47}
+  .badge.e{color:var(--exec); border-color:#3a2f5c}
+  .badge.x{color:var(--muted); text-decoration:line-through; opacity:.7}
+
+  section{margin:42px 0}
+  h2{font-size:13px; font-family:var(--mono); font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 18px; padding-bottom:10px; border-bottom:1px solid var(--border)}
+  h2 .n{color:var(--voice); margin-right:10px}
+  p{margin:0 0 14px}
+  .lead{font-size:17px; color:var(--text)}
+  strong{color:var(--head); font-weight:600}
+  code{font:13px/1.5 var(--mono); background:#0f1620; border:1px solid var(--border); border-radius:5px; padding:1px 6px; color:#9fd9ff}
+
+  /* architecture diagram */
+  .diagram{background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:28px}
+  .tui{border:1px dashed #34415a; border-radius:10px; padding:14px 18px; text-align:center; color:var(--muted); font-family:var(--mono); font-size:13px; background:#0f1620}
+  .tui b{color:var(--head)}
+  .layers{display:flex; gap:20px; margin:18px 0; align-items:stretch}
+  @media(max-width:680px){.layers{flex-direction:column}}
+  .node{flex:1; border-radius:12px; padding:18px 20px; border:1px solid; position:relative}
+  .node.voice{border-color:#1d4a47; background:linear-gradient(180deg,#0f221f,#0d1820)}
+  .node.exec{border-color:#3a2f5c; background:linear-gradient(180deg,#1a1530,#0f1020)}
+  .node .role{font:600 11px/1 var(--mono); letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px}
+  .node.voice .role{color:var(--voice)} .node.exec .role{color:var(--exec)}
+  .node .name{font-size:18px; color:var(--head); font-weight:600; margin-bottom:6px}
+  .node .desc{font-size:13.5px; color:var(--muted)}
+  .between{display:flex; flex-direction:column; justify-content:center; align-items:center; gap:10px; min-width:140px; color:var(--muted); font:12px/1.3 var(--mono); text-align:center}
+  @media(max-width:680px){.between{min-width:0; padding:8px 0}}
+  .between .ar{font-size:18px; color:var(--text)}
+  .between .lbl{font-size:11px}
+  .between .fwd{color:var(--exec)} .between .bwd{color:var(--voice)}
+  .you{text-align:center; margin-top:6px; color:var(--muted); font-family:var(--mono); font-size:13px}
+  .you b{color:var(--head)}
+  .conn{text-align:center; color:#34415a; font-size:20px; line-height:1; margin:2px 0}
+
+  /* loop steps */
+  .loop{counter-reset:step; display:grid; gap:12px}
+  .step{display:grid; grid-template-columns:34px 1fr; gap:16px; align-items:start; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px}
+  .step::before{counter-increment:step; content:counter(step); font:700 14px/30px var(--mono); text-align:center; width:30px; height:30px; border-radius:8px; background:var(--surface2); color:var(--voice); border:1px solid var(--border)}
+  .step .t{color:var(--head); font-weight:600}
+  .step .d{color:var(--muted); font-size:14px}
+  .step em{color:var(--exec); font-style:normal; font-family:var(--mono); font-size:12.5px}
+
+  /* card grids */
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 18px}
+  .card h3{margin:0 0 8px; font-size:15px; color:var(--head); display:flex; align-items:center; gap:8px}
+  .card h3 .dot{width:8px; height:8px; border-radius:50%; flex:none}
+  .card p{font-size:13.5px; color:var(--muted); margin:0}
+  .dot.v{background:var(--voice)} .dot.e{background:var(--exec)} .dot.w{background:var(--warn)} .dot.g{background:var(--good)}
+
+  /* stack table */
+  .stack{width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden}
+  .stack td{padding:13px 16px; border-top:1px solid var(--border); vertical-align:top}
+  .stack tr:first-child td{border-top:none}
+  .stack .layer{font:600 12px/1.4 var(--mono); white-space:nowrap; width:1%}
+  .stack .pick{color:var(--head); font-weight:600}
+  .stack .why{color:var(--muted); font-size:13.5px}
+
+  /* callout */
+  .callout{border:1px solid; border-radius:12px; padding:20px 22px; background:var(--surface)}
+  .callout.mem{border-color:#3a2f5c; background:linear-gradient(180deg,#15122a,#0f1320)}
+  .callout.risk{border-color:#5a4420; background:linear-gradient(180deg,#1f1810,#11100c)}
+  .callout h3{margin:0 0 10px; color:var(--head); font-size:16px}
+  .callout ul{margin:8px 0 0; padding-left:20px}
+  .callout li{margin:6px 0; font-size:14px}
+  .risk .tag{color:var(--warn); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.1em}
+
+  /* phases */
+  .phases{position:relative; margin-left:6px; padding-left:26px; border-left:2px solid var(--border)}
+  .phase{position:relative; margin-bottom:20px}
+  .phase::before{content:""; position:absolute; left:-33px; top:4px; width:12px; height:12px; border-radius:50%; background:var(--bg); border:2px solid var(--voice)}
+  .phase.spine::before{border-color:var(--warn); background:var(--warn)}
+  .phase.mvp::before{border-color:var(--good); background:var(--good)}
+  .phase .pl{font:700 11px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
+  .phase .pt{color:var(--head); font-weight:600; margin:5px 0 4px; font-size:15.5px}
+  .phase .pd{color:var(--muted); font-size:14px}
+  .pill{display:inline-block; font:700 10px/1 var(--mono); padding:4px 7px; border-radius:5px; margin-left:8px; vertical-align:middle}
+  .pill.spine{background:#2a2010; color:var(--warn); border:1px solid #5a4420}
+  .pill.mvp{background:#10220f; color:var(--good); border:1px solid #235622}
+
+  .two{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  @media(max-width:680px){.two{grid-template-columns:1fr}}
+  .scope{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 18px}
+  .scope h3{margin:0 0 10px; font-size:14px; display:flex; align-items:center; gap:8px; color:var(--head)}
+  .scope ul{margin:0; padding-left:18px} .scope li{font-size:13.5px; color:var(--muted); margin:5px 0}
+  .now h3 .dot{background:var(--good)} .later h3 .dot{background:var(--muted)}
+  .scope h3 .dot{width:8px;height:8px;border-radius:50%}
+
+  footer{margin-top:60px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:13px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">◍ Build Plan · Voice TUI</div>
+    <h1>Talk to a coding agent.<br><span class="accent">Hear it think out loud.</span></h1>
+    <p class="tagline">A terminal app where you hold a voice conversation with a real coding agent. You speak; it works; and it narrates what it's doing — in first person, semantically — instead of reading raw commands aloud.</p>
+    <div class="badges">
+      <span class="badge">TypeScript · one runtime</span>
+      <span class="badge v">OpenAI Realtime</span>
+      <span class="badge e">Claude Agent SDK</span>
+      <span class="badge">Ink TUI</span>
+      <span class="badge">voice-memory.md</span>
+      <span class="badge x">Twilio</span>
+      <span class="badge x">Python / Pipecat SDK</span>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="n">01</span> The idea</h2>
+    <p class="lead">Two layers, one persona. A powerful <strong>executor</strong> does the real work; a thin <strong>voice narrator</strong> is its ears and mouth. The user never feels two systems — the voice speaks <em>as</em> the harness.</p>
+    <p>Crucially, the narrator is <strong>not the brain</strong>. It doesn't try to answer coding questions itself. It listens, routes the task to the executor, and voices what the executor reports. All the hard tool-calling complexity stays inside the agent that's optimized for it.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span> Architecture</h2>
+    <div class="diagram">
+      <div class="tui"><b>TUI</b> &nbsp;(Ink)&nbsp; — &nbsp;transcript pane · live executor event log</div>
+      <div class="conn">▲&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▲</div>
+      <div class="layers">
+        <div class="node voice">
+          <div class="role">◍ Narrator · ears + mouth</div>
+          <div class="name">OpenAI Realtime</div>
+          <div class="desc">Speech-to-speech. Server-VAD, barge-in, the consistent voice. Lifted from Agent Grid's <code>realtime-session.ts</code>.</div>
+        </div>
+        <div class="between">
+          <div class="ar fwd">──▶</div>
+          <div class="lbl fwd">user transcript</div>
+          <div class="ar bwd">◀──</div>
+          <div class="lbl bwd">narration<br>(injected text)</div>
+        </div>
+        <div class="node exec">
+          <div class="role">◆ Executor · the brain</div>
+          <div class="name">Claude Agent SDK</div>
+          <div class="desc">Reads, edits, runs tools. Its streamed messages are the event source — assistant preambles &amp; <code>tool_use</code>.</div>
+        </div>
+      </div>
+      <div class="you">▲ &nbsp;<b>you</b> — speak &amp; listen &nbsp; · &nbsp; the orchestrator loop (your TS code) owns the wiring between the two nodes</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span> The core loop</h2>
+    <div class="loop">
+      <div class="step"><div class="t">You speak a task</div><div class="d">Realtime captures audio, runs VAD, and emits a final transcript — <em>conversation.item.input_audio_transcription.completed</em></div></div>
+      <div class="step"><div class="t">Route to the executor</div><div class="d">Your loop forwards that transcript to the Claude Agent SDK. The narrator does <strong>not</strong> answer it — no Realtime function-calling needed.</div></div>
+      <div class="step"><div class="t">Executor streams events</div><div class="d">Claude emits assistant text (intent preambles = narration gold), <em>tool_use</em> (ground truth), and <em>tool_result</em> (outcomes), live.</div></div>
+      <div class="step"><div class="t">Translate to narration</div><div class="d">Harvest the preambles, summarize tool calls semantically ("opening the auth module", not "cat src/auth.ts"). Flow or high-level mode decides batching.</div></div>
+      <div class="step"><div class="t">Inject &amp; speak</div><div class="d">Push narration into Realtime — <em>conversation.item.create</em> + <em>response.create</em> — and it's voiced in the agent's own voice. (This primitive already exists as <code>requestWrapUp()</code>.)</div></div>
+      <div class="step"><div class="t">Barge-in any time</div><div class="d">server_vad auto-cancels the in-flight response when you start talking. Interruption is already handled by the lifted client.</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span> Design principles</h2>
+    <div class="grid">
+      <div class="card"><h3><span class="dot v"></span>Narrator ≠ brain</h3><p>Realtime listens, routes, and voices. Claude reasons and codes. Keep the boundary hard or the voice will improvise wrong answers.</p></div>
+      <div class="card"><h3><span class="dot e"></span>Harvest preambles</h3><p>Don't build a command→English translator. The executor already states intent in plain language before each tool call — that <em>is</em> the narration.</p></div>
+      <div class="card"><h3><span class="dot v"></span>Two modes</h3><p><strong>Flow</strong> — live play-by-play. <strong>High-level</strong> — waits, then a clean summary. Same event stream, different batching policy.</p></div>
+      <div class="card"><h3><span class="dot g"></span>Never block the voice</h3><p>Coding is slow and bursty. Narrate as events arrive; fill long tool calls with progress, never freeze the turn on task completion.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span> The stack — all TypeScript</h2>
+    <table class="stack">
+      <tr><td class="layer" style="color:var(--voice)">TUI</td><td class="pick">Ink</td><td class="why">React-for-the-terminal — the standard for rich TS TUIs. Transcript pane + live event log.</td></tr>
+      <tr><td class="layer" style="color:var(--exec)">Executor</td><td class="pick">@anthropic-ai/claude-agent-sdk</td><td class="why">The brain. Streamed messages are the event source; no harness to build from scratch.</td></tr>
+      <tr><td class="layer" style="color:var(--voice)">Voice</td><td class="pick">OpenAI Realtime (lifted realtime-session.ts)</td><td class="why">Production-grade GA client already written in TS — WS protocol, VAD, barge-in, the injection primitive.</td></tr>
+      <tr><td class="layer" style="color:var(--warn)">Audio I/O</td><td class="pick">Node-native (mic + speaker)</td><td class="why">The one swap: the terminal has no browser MediaStream. Capture/play PCM16 @ 24kHz natively.</td></tr>
+      <tr><td class="layer" style="color:var(--good)">Memory</td><td class="pick">voice-memory.md</td><td class="why">Append on wrap-up, recall on connect. Persistence + "learns over time", zero training infra.</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span> Memory &amp; auto-improvement</h2>
+    <div class="callout mem">
+      <h3>One markdown file the agent keeps</h3>
+      <p style="color:var(--muted); font-size:14px; margin:0">Appended at the end of a call, prepended into the next call's instructions. Two kinds of memory:</p>
+      <ul>
+        <li><strong>Project facts &amp; conventions</strong> — like a CLAUDE.md the executor reads ("the API lives in <code>src/server</code>").</li>
+        <li><strong>Voice / narration preferences</strong> — "be terse", "don't read paths aloud", "default to high-level mode".</li>
+      </ul>
+      <p style="margin:12px 0 0; font-size:14px"><span style="color:var(--exec); font-family:var(--mono); font-size:12px">SYNERGY →</span> the wrap-up turn already generates a recap on hangup. Extend that same step to distill "what I learned" and append it. ~30 lines.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span> Risks &amp; what to derisk first</h2>
+    <div class="callout risk">
+      <span class="tag">#1 RISK</span>
+      <h3 style="margin-top:6px">Terminal audio I/O</h3>
+      <p style="color:var(--text); font-size:14px; margin:0">The lifted Realtime client assumes a renderer captures mic &amp; plays audio. A TUI has none — you need Node-native audio, which is the only native-dependency gotcha in the whole stack.</p>
+      <ul style="color:var(--muted)">
+        <li><strong>Prove a mic → Realtime → speaker round-trip before anything else.</strong> If that works, the rest is glue.</li>
+        <li>Secondary: keep the executor event log <em>structured</em> from day one, so a fidelity eval can bolt on later without a rewrite.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">08</span> Build sequence</h2>
+    <div class="phases">
+      <div class="phase spine"><div class="pl">Phase 0 <span class="pill spine">spine</span></div><div class="pt">Audio round-trip</div><div class="pd">Node mic → Realtime → speaker, talking to itself. Nothing else moves until this is green.</div></div>
+      <div class="phase"><div class="pl">Phase 1</div><div class="pt">Voice loop</div><div class="pd">Lift <code>realtime-session.ts</code>, swap in Node audio. You talk, it talks back. Barge-in works.</div></div>
+      <div class="phase"><div class="pl">Phase 2</div><div class="pt">Executor + text narration</div><div class="pd">Wire the Agent SDK; run a coding task; transform its events into spoken-style text and print it. Validate quality with zero audio cost.</div></div>
+      <div class="phase mvp"><div class="pl">Phase 3 <span class="pill mvp">MVP</span></div><div class="pt">Integrate</div><div class="pd">Forward user transcript → Claude; inject narration → Realtime. The whole concept, working end to end.</div></div>
+      <div class="phase"><div class="pl">Phase 4</div><div class="pt">TUI</div><div class="pd">Ink app: transcript pane + live event log. Wire the loop into a real interface.</div></div>
+      <div class="phase"><div class="pl">Phase 5</div><div class="pt">Memory</div><div class="pd"><code>voice-memory.md</code> — append on wrap-up, recall on connect.</div></div>
+      <div class="phase"><div class="pl">Stretch</div><div class="pt">Polish &amp; theme</div><div class="pd">Flow/high-level toggle · salience filter · narration-fidelity eval · sponsor tech (Cekura / NVIDIA / Pipecat Cloud) · fold back into Agent Grid.</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">09</span> Scope</h2>
+    <div class="two">
+      <div class="scope now"><h3><span class="dot"></span>In — now</h3><ul>
+        <li>TS voice TUI, single runtime</li>
+        <li>Realtime ↔ Claude Agent SDK loop</li>
+        <li>Semantic event narration</li>
+        <li>Barge-in + interruption</li>
+        <li>Markdown memory / persistence</li>
+      </ul></div>
+      <div class="scope later"><h3><span class="dot"></span>Later — swappable</h3><ul>
+        <li>Twilio telephony</li>
+        <li>Pipecat — via <strong>Pipecat Cloud API</strong>, not the Python SDK</li>
+        <li>NVIDIA open-weights narrator + LoRA</li>
+        <li>Cekura fidelity eval loop</li>
+        <li>Agent Grid integration (the product fold-back)</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Voice Coding Agent · build plan</span>
+    <span>status: scoped → ready to scaffold</span>
+  </footer>
+
+</div>
+</body>
+</html>
