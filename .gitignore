@@ -22,3 +22,8 @@ logs/
 
 # agent grid workspace state (local canvas, not project code)
 .agent-grid/
+
+# kazoo runtime + local per-project memory (per-user lives under ~/.kazoo)
+.kazoo/
+voice-memory.md
+
