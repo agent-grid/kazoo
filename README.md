@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" width="320" alt="Kazoo">
+</p>
+
 # Kazoo
 
 > Talk to a coding agent and hear it think out loud.
