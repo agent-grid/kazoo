@@ -64,12 +64,16 @@ export class RealtimeSession {
 
   private readonly apiKey: string
   private readonly model: string
-  private readonly voice: string
   private readonly speed: number | undefined
   private readonly instructions: string
   private readonly onEvent: RealtimeEventHandler
   private readonly logger: Logger
   private readonly suppressOpeningResponse: boolean
+
+  // Active voice. Starts at the caller's choice; on a voice-not-available
+  // error from session.update we fall back to DEFAULT_VOICE once and resend.
+  private voice: string
+  private voiceFallbackTried = false
 
   private ws: WebSocket | null = null
   private clientInitiatedClose = false
@@ -88,6 +92,8 @@ export class RealtimeSession {
     if (typeof args.onEvent !== 'function') throw new Error('onEvent required')
     this.apiKey = args.apiKey
     this.model = args.model || DEFAULT_MODEL
+    // `voice` is mutable so the fallback in handleServerEvent can switch
+    // it on a voice-not-available error and resend session.update.
     this.voice = args.voice || DEFAULT_VOICE
     this.speed = args.speed
     this.instructions = args.instructions || ''
@@ -173,35 +179,7 @@ export class RealtimeSession {
     // by the runtime ("Invalid modalities"). Audio mode still emits parallel
     // `response.output_audio_transcript.*` events, so locking output to audio
     // doesn't cost us captions.
-    this.send({
-      type: 'session.update',
-      session: {
-        type: 'realtime',
-        model: this.model,
-        output_modalities: ['audio'],
-        instructions: this.instructions,
-        audio: {
-          input: {
-            format: { type: 'audio/pcm', rate: 24000 },
-            transcription: { model: 'gpt-4o-mini-transcribe' },
-            turn_detection: {
-              type: 'server_vad',
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 500,
-            },
-          },
-          output: {
-            format: { type: 'audio/pcm', rate: 24000 },
-            voice: this.voice,
-            // `audio.output.speed` (OpenAI Realtime GA, range 0.25–1.5,
-            // default 1.0). Omit when unset so the server applies its own
-            // default rather than us echoing it back.
-            ...(this.speed !== undefined ? { speed: this.speed } : {}),
-          },
-        },
-      },
-    })
+    this.sendSessionUpdate()
 
     if (!this.suppressOpeningResponse) {
       // Trigger the opening stand-up. Instructions tell the agent how to open.
@@ -312,6 +290,41 @@ export class RealtimeSession {
     setTimeout(() => this.handleClose(1000, 'client hangup'), 0).unref?.()
   }
 
+  // Build + send the `session.update` payload. Factored out so the voice
+  // fallback path can resend it with `this.voice = DEFAULT_VOICE` after a
+  // voice-not-available error.
+  private sendSessionUpdate(): void {
+    this.send({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        model: this.model,
+        output_modalities: ['audio'],
+        instructions: this.instructions,
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            transcription: { model: 'gpt-4o-mini-transcribe' },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+            },
+          },
+          output: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            voice: this.voice,
+            // `audio.output.speed` (OpenAI Realtime GA, range 0.25–1.5,
+            // default 1.0). Omit when unset so the server applies its own
+            // default rather than us echoing it back.
+            ...(this.speed !== undefined ? { speed: this.speed } : {}),
+          },
+        },
+      },
+    })
+  }
+
   private send(obj: unknown): void {
     const socket = this.ws
     if (!socket || socket.readyState !== WebSocket.OPEN) return
@@ -373,6 +386,28 @@ export class RealtimeSession {
         const message = ev.error?.message || ev.message || 'OpenAI Realtime error'
         if (isBenignCancelRace(message, ev.error?.code)) {
           this.logger.debug({ message }, 'realtime: benign cancel race, swallowed')
+          return
+        }
+        // Voice-not-available fallback. If the requested voice isn't on this
+        // account, the server rejects the session.update with a voice-shaped
+        // error. We retry once with DEFAULT_VOICE and swallow the original
+        // error so the user just hears the agent in alloy instead of seeing
+        // a startup failure. Only triggers when:
+        //   - we haven't already retried, AND
+        //   - we aren't already on DEFAULT_VOICE.
+        if (
+          !this.voiceFallbackTried &&
+          this.voice !== DEFAULT_VOICE &&
+          isVoiceUnavailable(message, ev.error?.code)
+        ) {
+          this.voiceFallbackTried = true
+          const requested = this.voice
+          this.voice = DEFAULT_VOICE
+          this.logger.warn(
+            { requested, fallback: DEFAULT_VOICE, message },
+            'realtime: voice unavailable; retrying session.update with default voice',
+          )
+          this.sendSessionUpdate()
           return
         }
         this.emit({
@@ -515,4 +550,14 @@ export class RealtimeSession {
 function isBenignCancelRace(message: string, code: string | undefined): boolean {
   if (code === 'response_cancel_not_active') return true
   return /no active response/i.test(message)
+}
+
+// The voice-rejection error doesn't have a single documented code yet (the
+// GA surface has shifted around `invalid_voice` / `voice_not_available` /
+// `voice_unavailable`). Match either family of codes OR a voice-shaped
+// message. We're conservative: the predicate only matters when we're about
+// to retry, and the retry itself is bounded to one attempt.
+function isVoiceUnavailable(message: string, code: string | undefined): boolean {
+  if (code && /voice/i.test(code)) return true
+  return /\bvoice\b.*\b(not\s*available|unavailable|invalid|unknown|not\s*found)\b/i.test(message)
 }

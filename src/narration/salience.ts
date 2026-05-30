@@ -4,19 +4,18 @@
 // STATUS: stub. The threshold model lands with the narration module's real
 // implementation.
 
+import type { NarrationMode } from './modes.ts'
 import type { NarrationPhrase } from './translator.ts'
-
-export type SalienceMode = 'flow' | 'high-level'
 
 export type SalienceFilter = {
   /** Returns the phrases that should be spoken, given current mode. May
    *  drop, batch, or rewrite. */
   filter: (phrases: NarrationPhrase[]) => NarrationPhrase[]
-  setMode: (mode: SalienceMode) => void
+  setMode: (mode: NarrationMode) => void
 }
 
-export function createSalienceFilter(initialMode: SalienceMode = 'flow'): SalienceFilter {
-  let mode: SalienceMode = initialMode
+export function createSalienceFilter(initialMode: NarrationMode = 'flow'): SalienceFilter {
+  let mode: NarrationMode = initialMode
   return {
     setMode(next) {
       mode = next

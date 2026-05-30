@@ -29,5 +29,5 @@ executor, then turns the executor's events ("opening the auth module," not
 
 ## Status
 
-🚧 Early scaffolding. The design lives in [`PLAN.md`](./PLAN.md) and
+🚧 Early scaffolding. The design lives in
 [`voice-agent-plan.html`](./voice-agent-plan.html).

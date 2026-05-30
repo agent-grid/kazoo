@@ -31,7 +31,14 @@ async function main(): Promise<void> {
   const _rtInstructions = realtimeInstructions(persona)
   const _execPrompt = executorSystemPrompt(persona)
 
-  const bus = createBus()
+  const bus = createBus({
+    onListenerError(err, ev) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), ev: ev.type },
+        'bus: listener threw',
+      )
+    },
+  })
 
   // TODO(next PR): construct audio (mic + speaker), realtime, executor,
   // injector, distiller, orchestrator — then `await orchestrator.start()`.

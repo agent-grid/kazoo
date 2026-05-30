@@ -17,20 +17,38 @@ export type BusEvent =
 
 export type BusListener = (ev: BusEvent) => void
 
+/** Called when a listener throws. Bus emits MUST never crash the publisher,
+ *  but errors shouldn't be invisible either — wire this to the logger. */
+export type ListenerErrorHandler = (err: unknown, ev: BusEvent) => void
+
 export type Bus = {
   emit: (ev: BusEvent) => void
   subscribe: (fn: BusListener) => () => void
 }
 
-export function createBus(): Bus {
+export type BusOptions = {
+  /** Default: no-op (errors silently swallowed). Production callers should
+   *  pass a logger-backed handler so misbehaving listeners surface. */
+  onListenerError?: ListenerErrorHandler
+}
+
+export function createBus(opts: BusOptions = {}): Bus {
   const listeners = new Set<BusListener>()
+  const onListenerError = opts.onListenerError ?? noopErrorHandler
   return {
     emit(ev) {
       for (const fn of listeners) {
         try {
           fn(ev)
-        } catch {
-          // listeners must not crash the bus
+        } catch (err) {
+          // Listeners must not crash the bus. Surface via the handler so the
+          // failure is at least visible in the log.
+          try {
+            onListenerError(err, ev)
+          } catch {
+            // The error handler itself failed. Nothing useful left to do —
+            // swallow rather than recurse.
+          }
         }
       }
     },
@@ -39,4 +57,8 @@ export function createBus(): Bus {
       return () => listeners.delete(fn)
     },
   }
+}
+
+function noopErrorHandler(): void {
+  /* default — opts in to silence */
 }

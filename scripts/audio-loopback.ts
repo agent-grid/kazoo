@@ -85,14 +85,25 @@ async function main(): Promise<void> {
     }
   })()
 
-  const shutdown = async (): Promise<void> => {
-    logger.info('audio-loopback: shutting down')
-    await mic.close()
-    await speaker.close()
+  let shuttingDown = false
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    if (shuttingDown) return
+    shuttingDown = true
+    logger.info({ signal }, 'audio-loopback: shutting down')
+    // Order matters: close the session FIRST so we stop receiving
+    // `audio-chunk` events. Otherwise an in-flight chunk arrives after the
+    // speaker is torn down and writes to a destroyed subprocess.
     session.close()
+    // Mic next — stops feeding the (now-closed) session.
+    await mic.close()
+    // Speaker last — drains anything already in its queue, then tears down.
+    await speaker.close()
   }
   process.once('SIGINT', () => {
-    void shutdown().then(() => process.exit(0))
+    void shutdown('SIGINT').then(() => process.exit(0))
+  })
+  process.once('SIGTERM', () => {
+    void shutdown('SIGTERM').then(() => process.exit(0))
   })
 
   await pump

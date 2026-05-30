@@ -61,8 +61,11 @@ export class AsyncQueue<T> {
   [Symbol.asyncIterator](): AsyncIterator<T> {
     return {
       next: (): Promise<IteratorResult<T>> => {
-        const item = this.items.shift()
-        if (item !== undefined) {
+        // Check by length, NOT by `value !== undefined` — `T` may legitimately
+        // carry undefined (e.g. an Int16Array end-marker pattern) and we
+        // mustn't treat a real queued item as an empty queue.
+        if (this.items.length > 0) {
+          const item = this.items.shift() as T
           return Promise.resolve({ value: item, done: false })
         }
         if (this.closed) {

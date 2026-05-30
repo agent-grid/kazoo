@@ -14,7 +14,7 @@
 // STATUS: interface + a thin synchronous read scaffold. Distill+append lands
 // in distill.ts; the orchestrator calls it on hangup.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Logger } from '../lib/logger.ts'
@@ -52,11 +52,23 @@ export function recall(paths: MemoryPaths, logger: Logger): RecalledMemory {
 }
 
 function safeRead(path: string, logger: Logger): string {
+  // No `existsSync` first — that's TOCTOU and the catch handles ENOENT
+  // anyway. ENOENT for a missing memory file is expected on a fresh install
+  // and we silently treat it as empty; any other error we log + degrade.
   try {
-    if (!existsSync(path)) return ''
     return readFileSync(path, 'utf-8')
   } catch (err) {
+    if (isMissingFileError(err)) return ''
     logger.warn({ path, err: String(err) }, 'memory: read failed; treating as empty')
     return ''
   }
+}
+
+function isMissingFileError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === 'ENOENT'
+  )
 }
