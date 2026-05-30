@@ -7,7 +7,7 @@
 //   │ StatusBar (single line)                 │
 //   └─────────────────────────────────────────┘
 
-import { Box, Text } from 'ink'
+import { Box, Text, useApp, useInput, useStdin } from 'ink'
 import { useState } from 'react'
 import { DEFAULT_MODE, type NarrationMode } from '../narration/modes.ts'
 import type { Bus } from '../orchestrator/bus.ts'
@@ -49,10 +49,24 @@ function Banner() {
 }
 
 export function App({ bus }: AppProps) {
+  const { exit } = useApp()
+  const { isRawModeSupported } = useStdin()
   const turns = useTranscript(bus)
   const events = useEventLog(bus)
   const state = useOrchestratorState(bus)
   const [mode] = useState<NarrationMode>(DEFAULT_MODE)
+
+  // Subscribing to input puts stdin into raw mode, which is what keeps the
+  // Ink process alive — without it the event loop drains and `bun dev` exits
+  // immediately after the first paint. Also gives us a quit key. Guarded on
+  // raw-mode support so piped/CI runs (no TTY) don't crash on mount.
+  useInput(
+    (input, key) => {
+      if (key.ctrl && input === 'c') exit()
+      else if (input === 'q') exit()
+    },
+    { isActive: isRawModeSupported === true },
+  )
 
   return (
     <Box flexDirection="column" paddingX={1}>
