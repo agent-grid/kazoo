@@ -1,0 +1,35 @@
+appId: com.kazoo.app
+productName: Kazoo
+directories:
+  output: release
+  buildResources: assets
+files:
+  - "out/**"
+  - "package.json"
+
+# The SDK executable is a ~230MB native ELF/Mach-O/PE living in a SIBLING
+# platform package (@anthropic-ai/claude-agent-sdk-<plat>), NOT in
+# claude-agent-sdk itself. It cannot run from inside asar, so unpack BOTH the
+# glue package and every platform package. The trailing `*` catches
+# -linux-x64, -darwin-arm64, -win32-x64, etc. `runner.ts` resolves the binary
+# from app.asar.unpacked at runtime via pathToClaudeCodeExecutable.
+asarUnpack:
+  - "**/node_modules/@anthropic-ai/claude-agent-sdk/**"
+  - "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
+
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+  # The native binary needs JIT + child-process exec under hardened runtime.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+
+win:
+  target: nsis
+
+linux:
+  target:
+    - AppImage
+  category: Development

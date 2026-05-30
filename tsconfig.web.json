@@ -1,0 +1,20 @@
+{
+  // Renderer side: React + DOM. Shares the IPC types with the node project,
+  // but pulls them as TYPES ONLY (verbatimModuleSyntax) so no core runtime
+  // (and no secret path) enters the renderer bundle.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/web.tsbuildinfo"
+  },
+  // The renderer reads `src/shared` (IPC types) and type-only slices of
+  // `src/core` (BusEvent, NarrationMode). Those files are OWNED by the node
+  // project, so we REFERENCE it rather than re-`include` them — re-including
+  // would double-own files across two composite projects (a hard error), and
+  // the reference is what `verbatimModuleSyntax` rides on to keep the imports
+  // type-only (no core runtime in the renderer bundle).
+  "references": [{ "path": "./tsconfig.node.json" }],
+  "include": ["src/renderer"]
+}

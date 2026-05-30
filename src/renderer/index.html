@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Production CSP is also enforced via response headers in main (window.ts),
+      which is the authoritative layer. This meta tag is defense-in-depth for
+      the loaded document. `worker-src 'self'` covers the AudioWorklet module
+      fetch. In dev, electron-vite serves over its own origin and the header
+      CSP is skipped; this meta stays compatible (it allows 'self').
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    />
+    <title>Kazoo</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

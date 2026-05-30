@@ -1,37 +1,8 @@
 {
-  "compilerOptions": {
-    // Bun runs .ts/.tsx natively — tsc is only for typechecking.
-    "lib": ["ESNext"],
-    "target": "ESNext",
-    "module": "Preserve",
-    "moduleResolution": "Bundler",
-    "moduleDetection": "force",
-
-    // React (Ink uses React 19 + automatic JSX runtime).
-    "jsx": "react-jsx",
-
-    // Bun-style imports: foo.ts is fine, no extension rewriting.
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
-    "isolatedModules": true,
-
-    // Strictness — set high from day one. If something becomes friction we
-    // file an issue, not loosen the dial.
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": true,
-
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-
-    "types": ["bun-types"]
-  },
-  "include": ["src/**/*", "scripts/**/*"],
-  "exclude": ["node_modules", "dist", "docs/reference"]
+  // Solution file — references only. `npm run typecheck` (`tsc -b`) walks
+  // both leaf projects. One config can't serve the DOM-less main/core and the
+  // DOM renderer, so they're split: node (main + preload + core + shared) and
+  // web (renderer + shared).
+  "files": [],
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }]
 }

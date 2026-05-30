@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the Mac build (electron-builder.yml: mac.entitlements
+  + mac.entitlementsInherit). The Claude Agent SDK spawns a ~230 MB native `claude`
+  executable as a CHILD PROCESS, and that binary JIT-compiles, so under the macOS
+  hardened runtime we must grant:
+    - com.apple.security.cs.allow-jit                     — the native binary uses JIT.
+    - com.apple.security.cs.allow-unsigned-executable-memory — V8 / native binary needs W^X relaxed.
+    - com.apple.security.cs.disable-library-validation    — load the unpacked sibling-package
+                                                            binary (signed separately / not by us).
+    - com.apple.security.cs.allow-dyld-environment-variables — Electron forwards env to the child.
+    - com.apple.security.inherit (inherit plist)          — the spawned child inherits these.
+    - com.apple.security.device.audio-input               — microphone capture (NSMicrophoneUsageDescription).
+  See SURFACE_PLAN §A ("Mac: hardened-runtime + entitlements + notarization for the
+  native child") and Risk #1(c).
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.inherit</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>
