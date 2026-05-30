@@ -18,7 +18,19 @@ import { App } from './tui/App.tsx'
 async function main(): Promise<void> {
   const config = loadConfig()
   const logger = createLogger({ file: config.log.file, level: config.log.level })
-  logger.info({ config: { ...config, openaiApiKey: '***', anthropicApiKey: '***' } }, 'kazoo: boot')
+  logger.info(
+    {
+      config: {
+        ...config,
+        openaiApiKey: '***',
+        anthropic: {
+          oauthToken: config.anthropic.oauthToken ? '***' : undefined,
+          apiKey: config.anthropic.apiKey ? '***' : undefined,
+        },
+      },
+    },
+    'kazoo: boot',
+  )
 
   const memory = recall(
     { userMemory: config.memory.userMemoryPath, projectMemory: config.memory.projectMemoryPath },

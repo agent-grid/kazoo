@@ -7,7 +7,14 @@ import { resolveMemoryPaths } from './memory/store.ts'
 
 export type Config = {
   openaiApiKey: string
-  anthropicApiKey: string
+  /** Executor auth — at least one is required to actually USE the executor,
+   *  but we don't enforce that here. The executor PR resolves the
+   *  either/or (preferring oauthToken over apiKey) and crashes if neither
+   *  is present. Phase 0 / audio-loopback only needs `openaiApiKey`. */
+  anthropic: {
+    oauthToken: string | undefined
+    apiKey: string | undefined
+  }
   realtime: {
     model: string
     voice: string
@@ -28,7 +35,8 @@ export type Config = {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const openaiApiKey = required(env, 'OPENAI_API_KEY')
-  const anthropicApiKey = required(env, 'ANTHROPIC_API_KEY')
+  const oauthToken = env.CLAUDE_CODE_OAUTH_TOKEN?.trim() || undefined
+  const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined
 
   const speedRaw = env.KAZOO_REALTIME_SPEED?.trim()
   const speed = speedRaw ? Number(speedRaw) : undefined
@@ -46,7 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   return {
     openaiApiKey,
-    anthropicApiKey,
+    anthropic: { oauthToken, apiKey },
     realtime: {
       model: env.KAZOO_REALTIME_MODEL || 'gpt-realtime',
       voice: env.KAZOO_REALTIME_VOICE || 'alloy',

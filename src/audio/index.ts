@@ -2,6 +2,7 @@
 // rather than reaching into mic.ts / speaker.ts directly — that way the
 // future swap from subprocess → native binding stays a single-file change.
 
+export { type AudioBackend, detectBackend } from './backend.ts'
 export {
   BYTES_PER_SAMPLE,
   base64ToInt16,
