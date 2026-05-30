@@ -11,6 +11,15 @@ import { Box, Text } from 'ink'
 import { useState } from 'react'
 import { DEFAULT_MODE, type NarrationMode } from '../narration/modes.ts'
 import type { Bus } from '../orchestrator/bus.ts'
+import {
+  BRAND_TEAL,
+  KAZOO_GLYPH_BOTTOM,
+  KAZOO_GLYPH_MID_DOTS,
+  KAZOO_GLYPH_MID_LEFT,
+  KAZOO_GLYPH_MID_RIGHT,
+  KAZOO_GLYPH_TOP,
+  KAZOO_WORDMARK,
+} from './banner.ts'
 import { EventLog } from './EventLog.tsx'
 import { useEventLog, useOrchestratorState, useTranscript } from './hooks.ts'
 import { StatusBar } from './StatusBar.tsx'
@@ -18,6 +27,25 @@ import { TranscriptPane } from './TranscriptPane.tsx'
 
 export type AppProps = {
   bus: Bus
+}
+
+/** Startup banner — teal kazoo glyph + white pixel KAZOO wordmark.
+ *  Matches assets/logo.png. The `···` inside the resonator box is
+ *  static for now; it becomes the live speaking indicator later. */
+function Banner() {
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Text color={BRAND_TEAL}>{KAZOO_GLYPH_TOP}</Text>
+      <Box>
+        <Text color={BRAND_TEAL}>{KAZOO_GLYPH_MID_LEFT}</Text>
+        <Text color="white">{KAZOO_GLYPH_MID_DOTS}</Text>
+        <Text color={BRAND_TEAL}>{KAZOO_GLYPH_MID_RIGHT}</Text>
+      </Box>
+      <Text color={BRAND_TEAL}>{KAZOO_GLYPH_BOTTOM}</Text>
+      <Text color="white">{KAZOO_WORDMARK}</Text>
+      <Text dimColor>voice-native coding agent</Text>
+    </Box>
+  )
 }
 
 export function App({ bus }: AppProps) {
@@ -28,10 +56,7 @@ export function App({ bus }: AppProps) {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Box marginBottom={1}>
-        <Text bold>kazoo</Text>
-        <Text dimColor> · voice-native coding agent</Text>
-      </Box>
+      <Banner />
 
       <Box flexDirection="column" flexGrow={1}>
         <TranscriptPane turns={turns} />
