@@ -21,14 +21,28 @@ export type { NarrationMode } from '../core/narration/modes.ts'
  *  into `src/core` directly. Type-only — no runtime crosses with it. */
 export type { BusEvent } from '../core/orchestrator/bus.ts'
 
-/** One-shot session metadata sent to the renderer on init. DELIBERATELY
- *  minimal — widening this is a secret-leak vector (Risk #10). */
+/** Session metadata sent to the renderer on init AND re-emitted whenever the
+ *  workspace is swapped via the picker. DELIBERATELY minimal — widening this
+ *  is a secret-leak vector (Risk #10). */
 export type SessionInfo = {
   /** The executor's pinned workspace dir, for the StatusBar. */
   cwd: string
   /** The Realtime model id, for display only. */
   model: string
 }
+
+/** Result of `kazoo.pickWorkspace()`. Discriminated so the renderer can render
+ *  each outcome (success / user-cancelled / invalid / unsafe / error) without
+ *  any string parsing. Crucially this is FLAT DATA — nothing throws across
+ *  the IPC seam. Sensitive details (full path of the rejected root, etc.) stay
+ *  in the main-process log; the message here is a short human string. */
+export type WorkspacePickResult =
+  | { ok: true; cwd: string }
+  | { ok: false; reason: 'cancelled' }
+  | { ok: false; reason: 'invalid'; message: string }
+  | { ok: false; reason: 'unsafe'; message: string }
+  | { ok: false; reason: 'busy'; message: string }
+  | { ok: false; reason: 'error'; message: string }
 
 /** Renderer → main control messages. The renderer can only express these
  *  shapes; it can never send an arbitrary channel (preload exposes functions,
@@ -51,6 +65,10 @@ export const CH = {
   /** Fired once when the renderer's React tree + preload bridge are live, so
    *  main can flush `SESSION_INFO` and (optionally) auto-start. */
   RENDERER_READY: 'renderer-ready',
+  /** Two-way (ipcRenderer.invoke / ipcMain.handle). The renderer asks main to
+   *  show the native directory picker; main returns a `WorkspacePickResult`
+   *  and, on success, re-emits `SESSION_INFO`. */
+  PICK_WORKSPACE: 'pick-workspace',
 
   // ── main → renderer ──
   /** A serialized `BusEvent` (display / state). */
@@ -83,6 +101,7 @@ export type IpcPayloads = {
   [CH.RESPONSE_STARTED]: undefined
   [CH.AUDIO_DONE]: undefined
   [CH.SESSION_INFO]: SessionInfo
+  [CH.PICK_WORKSPACE]: WorkspacePickResult
 }
 
 /** The typed surface preload mounts at `window.kazoo`. Declared here (shared)
@@ -101,6 +120,12 @@ export type KazooBridge = {
   setMode: (mode: NarrationMode) => void
   /** Announce the renderer is mounted and ready for events. */
   ready: () => void
+  /** Open the native directory picker. Returns a `WorkspacePickResult` (never
+   *  rejects — failure modes are encoded into the result). On success, main
+   *  swaps the executor's cwd and re-emits `SESSION_INFO`. The renderer can
+   *  treat this as fire-and-forget plus listening to `onSessionInfo`, OR await
+   *  the returned result to drive a toast / error banner. */
+  pickWorkspace: () => Promise<WorkspacePickResult>
 
   // main → renderer (each returns an unsubscribe)
   onBus: (cb: (ev: BusEvent) => void) => () => void

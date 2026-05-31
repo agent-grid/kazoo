@@ -544,6 +544,59 @@ body {
 }
 .status-dir {
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0; /* allow the path to truncate */
+}
+
+/* Workspace-picker button. Looks like a chip in the status bar; clicking opens
+ * the native directory dialog (handled by main). Disabled mid-call and during
+ * an in-flight pick. Reuses `--line-strong` / `--accent` so the chrome stays
+ * coherent with `.mode-toggle`. */
+.workspace-pick {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60ch;
+}
+.workspace-pick:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+.workspace-pick:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.workspace-pick-label {
+  color: var(--muted-dim);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+.workspace-pick-path {
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* tail-truncate long paths from the FRONT, keep the leaf */
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+.workspace-notice {
+  color: var(--warn);
+  font-size: 11px;
+  max-width: 40ch;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .status-clock {
   color: var(--muted);

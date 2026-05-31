@@ -15,33 +15,119 @@
 //   safety → memory recall → personas → bus → distiller → audioSink →
 //   deferred handler proxies → realtime → injector → executor → orchestrator →
 //   bind handlers → BrowserWindow → wire IPC → lifecycle.
+//
+// SESSION REBUILD: the realtime / injector / executor / orchestrator quartet
+// is per-workspace state — when the user picks a new workspace via the
+// renderer's picker we tear that quartet down and rebuild it with the new cwd
+// (see `rebuildSession` below). The audio sink, bus, distiller, logger,
+// window, and IPC wiring survive the swap; the IPC layer reads the active
+// stack through a `getSession()` accessor so we never have to unwire/rewire.
 
 import 'dotenv/config' // MUST precede loadConfig — Node doesn't auto-load .env.
 
 import { mkdirSync, realpathSync } from 'node:fs'
 import { app, type BrowserWindow } from 'electron'
-import { loadConfig } from '../core/config.ts'
+import { type Config, loadConfig } from '../core/config.ts'
 import type { ExecutorEvent } from '../core/executor/events.ts'
-import { createExecutor } from '../core/executor/runner.ts'
+import { createExecutor, type ExecutorRunner } from '../core/executor/runner.ts'
 import { defaultPermissionPolicy } from '../core/executor/tools.ts'
 import { isKazooError } from '../core/lib/errors.ts'
-import { createLogger } from '../core/lib/logger.ts'
-import { createDistiller } from '../core/memory/distill.ts'
+import { createLogger, type Logger } from '../core/lib/logger.ts'
+import { createDistiller, type Distiller } from '../core/memory/distill.ts'
 import { recall } from '../core/memory/store.ts'
 import { executorSystemPrompt, realtimeInstructions } from '../core/narration/persona.ts'
+import type { Bus } from '../core/orchestrator/bus.ts'
 import { createBus } from '../core/orchestrator/bus.ts'
-import { createOrchestrator } from '../core/orchestrator/loop.ts'
+import { createOrchestrator, type Orchestrator } from '../core/orchestrator/loop.ts'
 import type { RealtimeEvent } from '../core/realtime/events.ts'
 import { createQueuedInjector } from '../core/realtime/inject.ts'
 import { RealtimeSession } from '../core/realtime/session.ts'
-import type { SessionInfo } from '../shared/ipc-types.ts'
+import { CH, type SessionInfo, type WorkspacePickResult } from '../shared/ipc-types.ts'
 import { createAudioSink } from './audio-sink.ts'
-import { resolveExecutorAuth } from './executor-auth.ts'
+import { type ExecutorAuth, resolveExecutorAuth } from './executor-auth.ts'
 import { wireIpc } from './ipc.ts'
 import { installLifecycle } from './lifecycle.ts'
 import { resolveSdkExecutable } from './sdk-paths.ts'
 import { createWindow } from './window.ts'
 import { assertWorkspaceSafe } from './workspace.ts'
+import { pickWorkspace } from './workspace-picker.ts'
+
+/** Per-workspace state. Replaced atomically by `rebuildSession`. */
+type SessionStack = {
+  realtime: RealtimeSession
+  executor: ExecutorRunner
+  orchestrator: Orchestrator
+  workspaceReal: string
+}
+
+/** Inputs that don't change across a workspace swap. */
+type StackBuildDeps = {
+  config: Config
+  auth: ExecutorAuth
+  logger: Logger
+  bus: Bus
+  distiller: Distiller
+  rtInstructions: string
+  execPrompt: string
+  audioSink: ReturnType<typeof createAudioSink>
+  executablePath: string | undefined
+}
+
+/** Build a complete session quartet bound to `workspaceReal`. The caller is
+ *  responsible for ensuring the dir exists and has been canonicalized +
+ *  safety-validated already. */
+function buildSession(deps: StackBuildDeps, workspaceReal: string): SessionStack {
+  // Deferred-handler proxies, identical to the original bootstrap. The
+  // realtime session and executor runner need an `onEvent` at construction
+  // time, but the orchestrator needs them in its deps, so we bind the proxies
+  // once the orchestrator exists. Nothing emits before `orchestrator.start()`,
+  // so no event is lost.
+  let realtimeHandler: (ev: RealtimeEvent) => void = () => {}
+  let executorHandler: (ev: ExecutorEvent) => void = () => {}
+
+  const realtime = new RealtimeSession({
+    apiKey: deps.config.openaiApiKey,
+    model: deps.config.realtime.model,
+    voice: deps.config.realtime.voice,
+    ...(deps.config.realtime.speed !== undefined ? { speed: deps.config.realtime.speed } : {}),
+    ...(deps.config.realtime.reasoningEffort !== undefined
+      ? { reasoningEffort: deps.config.realtime.reasoningEffort }
+      : {}),
+    instructions: deps.rtInstructions,
+    logger: deps.logger,
+    onEvent: (ev) => realtimeHandler(ev),
+  })
+
+  const injector = createQueuedInjector(realtime, deps.logger, {
+    onSpoken: (text) => deps.bus.emit({ type: 'narration-spoken', text }),
+  })
+
+  const policy = defaultPermissionPolicy(workspaceReal)
+  const executor = createExecutor({
+    oauthToken: deps.auth.oauthToken,
+    apiKey: deps.auth.apiKey,
+    model: deps.config.executor.model,
+    systemPrompt: deps.execPrompt,
+    policy,
+    executablePath: deps.executablePath,
+    onEvent: (ev) => executorHandler(ev),
+    logger: deps.logger,
+  })
+
+  const orchestrator = createOrchestrator({
+    realtime,
+    executor,
+    injector,
+    audioSink: deps.audioSink,
+    distiller: deps.distiller,
+    bus: deps.bus,
+    logger: deps.logger,
+  })
+  realtimeHandler = orchestrator.onRealtimeEvent
+  executorHandler = orchestrator.onExecutorEvent
+
+  return { realtime, executor, orchestrator, workspaceReal }
+}
 
 async function bootstrap(): Promise<void> {
   // 1. Config — fail-fast on missing OPENAI_API_KEY (loadConfig throws), then
@@ -73,10 +159,10 @@ async function bootstrap(): Promise<void> {
   //    realpath after mkdir so the runner's path-scope check operates on the
   //    canonical path; preflight refuses dangerous roots.
   mkdirSync(config.executor.workspace, { recursive: true, mode: 0o700 })
-  const workspaceReal = realpathSync(config.executor.workspace)
-  assertWorkspaceSafe(workspaceReal)
+  const initialWorkspaceReal = realpathSync(config.executor.workspace)
+  assertWorkspaceSafe(initialWorkspaceReal)
   logger.info(
-    { workspace: workspaceReal, configured: config.executor.workspace },
+    { workspace: initialWorkspaceReal, configured: config.executor.workspace },
     'kazoo: executor workspace ready',
   )
 
@@ -90,7 +176,8 @@ async function bootstrap(): Promise<void> {
   const rtInstructions = realtimeInstructions(personaPrefs)
   const execPrompt = executorSystemPrompt(personaPrefs)
 
-  // 5. Bus + memory distiller.
+  // 5. Bus + memory distiller. Bus + distiller persist across a workspace
+  //    swap (no workspace coupling).
   const bus = createBus({
     onListenerError(err, ev) {
       logger.warn(
@@ -106,41 +193,11 @@ async function bootstrap(): Promise<void> {
 
   // 6. AudioSink — the Electron seam replacing the subprocess speaker. It
   //    targets the window's webContents once the window exists (set below).
+  //    Lives across workspace swaps; webContents lifetime is the window's.
   const audioSink = createAudioSink()
 
-  // 7. Deferred-handler proxies. The orchestrator needs realtime + executor in
-  //    its deps, but those objects need an onEvent at construction time, so we
-  //    bind the proxies once the orchestrator exists. Nothing emits before
-  //    `orchestrator.start()`, so no event is lost.
-  let realtimeHandler: (ev: RealtimeEvent) => void = () => {}
-  let executorHandler: (ev: ExecutorEvent) => void = () => {}
-
-  // 8. Realtime — the narrator (ears + mouth). Persona tells it NOT to answer
-  //    coding questions; it voices our injected narration phrases. Opening
-  //    response suppressed so the agent waits for the user to speak first.
-  const realtime = new RealtimeSession({
-    apiKey: config.openaiApiKey,
-    model: config.realtime.model,
-    voice: config.realtime.voice,
-    ...(config.realtime.speed !== undefined ? { speed: config.realtime.speed } : {}),
-    instructions: rtInstructions,
-    logger,
-    onEvent: (ev) => realtimeHandler(ev),
-  })
-
-  // 9. Injector — scheduler/pacing. `onSpoken` fires AFTER a phrase actually
-  //    goes out, so `narration-spoken` bus events stay truthful when the
-  //    scheduler coalesces a burst.
-  const injector = createQueuedInjector(realtime, logger, {
-    onSpoken: (text) => bus.emit({ type: 'narration-spoken', text }),
-  })
-
-  // 10. Executor — the brain. Sandboxed to the RESOLVED workspace. Auth is the
-  //     single resolved credential (OAuth preferred). The SDK child env is
-  //     built from an allowlist inside the runner.
-  const policy = defaultPermissionPolicy(workspaceReal)
-  // Resolve the native SDK binary path. `undefined` in dev (SDK self-resolves);
-  // the unpacked-asar path in a packaged build (SURFACE_PLAN §A / Risk #1).
+  // 7. Resolve the native SDK binary path once. `undefined` in dev (SDK
+  //    self-resolves); the unpacked-asar path in a packaged build.
   const executablePath = resolveSdkExecutable(app.isPackaged)
   if (app.isPackaged && !executablePath) {
     logger.warn(
@@ -148,56 +205,136 @@ async function bootstrap(): Promise<void> {
         'deferring to SDK default resolution',
     )
   }
-  const executor = createExecutor({
-    oauthToken: auth.oauthToken,
-    apiKey: auth.apiKey,
-    model: config.executor.model,
-    systemPrompt: execPrompt,
-    policy,
-    executablePath,
-    onEvent: (ev) => executorHandler(ev),
-    logger,
-  })
 
-  // 11. Orchestrator — wire the two handler slots. The loop is surface-free:
-  //     it talks audio through `audioSink`, never Electron.
-  const orchestrator = createOrchestrator({
-    realtime,
-    executor,
-    injector,
-    audioSink,
-    distiller,
+  // 8. First session stack — bound to the initial workspace. A
+  //    `sessionRef`-style holder lets IPC + lifecycle indirect through the
+  //    "current" stack so the workspace picker can swap it later without
+  //    re-wiring anything.
+  const buildDeps: StackBuildDeps = {
+    config,
+    auth,
+    logger,
     bus,
+    distiller,
+    rtInstructions,
+    execPrompt,
+    audioSink,
+    executablePath,
+  }
+  let session: SessionStack = buildSession(buildDeps, initialWorkspaceReal)
+  let sessionInfo: SessionInfo = {
+    cwd: session.workspaceReal,
+    model: config.realtime.model,
+  }
+
+  // 9. App lifecycle — graceful shutdown reads the CURRENT session so a swap
+  //    mid-call (impossible by the in-call guard, but still) tears down the
+  //    right pair.
+  installLifecycle({
+    app,
+    getOrchestrator: () => session.orchestrator,
+    getExecutor: () => session.executor,
     logger,
   })
-  realtimeHandler = orchestrator.onRealtimeEvent
-  executorHandler = orchestrator.onExecutorEvent
 
-  // 12. App lifecycle — graceful shutdown on quit → orchestrator.stop +
-  //     executor.close (no `src/lib/subprocesses.ts`; this is the hook).
-  installLifecycle({ app, orchestrator, executor, logger })
-
-  // 13. Window + IPC. The window is the surface; IPC is the only bridge.
+  // 10. Window + IPC.
   await app.whenReady()
   const { window }: { window: BrowserWindow } = createWindow()
   audioSink.setWebContents(window.webContents)
 
-  const sessionInfo: SessionInfo = {
-    cwd: workspaceReal,
-    model: config.realtime.model,
+  // The workspace-swap handler. Hot-swaps the per-workspace quartet:
+  //   - refuses if a call is live (anything other than idle/ended);
+  //   - shows the dialog + safety-validates (workspace-picker.ts);
+  //   - tears down the OLD orchestrator + executor;
+  //   - builds a fresh stack at the new cwd;
+  //   - re-emits SESSION_INFO so the StatusBar updates.
+  // Returns a discriminated result; the renderer can surface cancel/unsafe
+  // distinctly from "you have to hang up first".
+  const handlePickWorkspace = async (): Promise<WorkspacePickResult> => {
+    const state = session.orchestrator.state
+    if (state !== 'idle' && state !== 'ended') {
+      return {
+        ok: false,
+        reason: 'busy',
+        message: `Hang up first — workspace can't be changed while the call is ${state}.`,
+      }
+    }
+
+    const result = await pickWorkspace({ window, logger })
+    if (!result.ok) return result
+
+    if (result.cwd === session.workspaceReal) {
+      // No-op selection (operator picked the same dir). Still emit
+      // SESSION_INFO so the UI clears any "loading" affordance.
+      window.webContents.send(CH.SESSION_INFO, sessionInfo)
+      return result
+    }
+
+    logger.info(
+      { from: session.workspaceReal, to: result.cwd },
+      'kazoo: swapping executor workspace',
+    )
+
+    // Ensure the picked dir exists and is canonical for the executor. The
+    // picker already realpath'd; mkdir is a defensive no-op (the dir
+    // exists, since the picker selected it) that also makes the operation
+    // resilient to the dir being deleted between pick and swap.
+    try {
+      mkdirSync(result.cwd, { recursive: true })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      logger.warn({ cwd: result.cwd, err: message }, 'kazoo: workspace mkdir failed')
+      return { ok: false, reason: 'error', message }
+    }
+
+    // Tear down old stack. Orchestrator may not have been started; .stop()
+    // is safe in that case (it's idempotent on idle).
+    const old = session
+    try {
+      await old.orchestrator.stop()
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'kazoo: old orchestrator.stop threw during swap',
+      )
+    }
+    try {
+      await old.executor.close()
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'kazoo: old executor.close threw during swap',
+      )
+    }
+
+    // Build new stack + atomically replace.
+    try {
+      session = buildSession(buildDeps, result.cwd)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      logger.error({ err: message }, 'kazoo: buildSession threw during swap')
+      return { ok: false, reason: 'error', message }
+    }
+    sessionInfo = { cwd: result.cwd, model: config.realtime.model }
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send(CH.SESSION_INFO, sessionInfo)
+    }
+    logger.info({ workspace: result.cwd }, 'kazoo: workspace swap complete')
+    return result
   }
+
   const teardownIpc = wireIpc({
     webContents: window.webContents,
-    realtime,
-    orchestrator,
+    getSession: () => ({
+      realtime: session.realtime,
+      orchestrator: session.orchestrator,
+    }),
     bus,
     setMode: (msg) => {
-      // No mode-aware narration logic is wired in the loop yet; emitting the
-      // bus event keeps the StatusBar mirror truthful and is the seam for when
-      // mode-batching lands.
       bus.emit({ type: 'narration-mode', mode: msg.mode })
     },
-    sessionInfo,
+    getSessionInfo: () => sessionInfo,
+    pickWorkspace: handlePickWorkspace,
     logger,
   })
 

@@ -10,7 +10,7 @@
 // audio never churns the store. SESSION_INFO (cwd/model) arrives once, on the
 // ready handshake.
 
-import { useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { NarrationMode } from '../core/narration/modes.ts'
 import type { SessionInfo } from '../shared/ipc-types.ts'
 import { useAudioIO } from './audio/useAudioIO.ts'
@@ -61,6 +61,77 @@ export function App(): React.JSX.Element {
     window.kazoo.setMode(mode)
   }
 
+  // ── Workspace picker. Main owns the native dialog + safety validation +
+  // executor swap; the renderer just drives it and surfaces the outcome.
+  // The notice is a short transient string (cleared on success or after a
+  // few seconds for non-fatal results).
+  const [picking, setPicking] = useState(false)
+  const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
+  // Cancel the auto-clear timer if a new pick lands first (prevents the old
+  // timer from clearing the new notice).
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const flashNotice = useCallback((text: string | null, ms: number): void => {
+    if (noticeTimerRef.current !== null) {
+      clearTimeout(noticeTimerRef.current)
+      noticeTimerRef.current = null
+    }
+    setWorkspaceNotice(text)
+    if (text !== null && ms > 0) {
+      noticeTimerRef.current = setTimeout(() => {
+        setWorkspaceNotice(null)
+        noticeTimerRef.current = null
+      }, ms)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current)
+    }
+  }, [])
+
+  const onPickWorkspace = useCallback((): void => {
+    if (picking) return
+    setPicking(true)
+    flashNotice(null, 0)
+    void window.kazoo
+      .pickWorkspace()
+      .then((result) => {
+        if (result.ok) {
+          // SESSION_INFO is broadcast by main on success; the existing
+          // onSessionInfo listener updates the displayed cwd. A short ack
+          // confirms the swap actually happened.
+          flashNotice('workspace updated', 2500)
+          return
+        }
+        switch (result.reason) {
+          case 'cancelled':
+            // User backed out of the dialog. No notice — silent is fine.
+            return
+          case 'busy':
+          case 'unsafe':
+          case 'invalid':
+          case 'error':
+            flashNotice(result.message, 6000)
+            return
+          default: {
+            // Exhaustiveness — a new reason variant must be handled.
+            const _never: never = result
+            void _never
+            return
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        flashNotice(`picker error: ${message}`, 6000)
+      })
+      .finally(() => {
+        setPicking(false)
+      })
+  }, [picking, flashNotice])
+
   return (
     <div className="app">
       <Header
@@ -86,7 +157,10 @@ export function App(): React.JSX.Element {
         isSpeaking={audio.isSpeaking}
         cwd={session?.cwd ?? null}
         live={live}
+        workspaceNotice={workspaceNotice}
         onSetMode={onSetMode}
+        onPickWorkspace={onPickWorkspace}
+        picking={picking}
       />
       {audio.error !== null && (
         <div style={{ position: 'fixed', bottom: 36, right: 12 }} className="call-error">

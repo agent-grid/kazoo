@@ -19,6 +19,7 @@ import {
   type KazooBridge,
   type NarrationMode,
   type SessionInfo,
+  type WorkspacePickResult,
 } from '../shared/ipc-types'
 
 /** Subscribe to a main→renderer channel, stripping the raw `event` arg so the
@@ -67,6 +68,13 @@ const api: KazooBridge = {
   ready: (): void => {
     ipcRenderer.send(CH.RENDERER_READY)
   },
+  pickWorkspace: (): Promise<WorkspacePickResult> =>
+    // `invoke` is the two-way IPC primitive; main's matching `handle` runs
+    // the native dialog + safety validation + executor swap and returns the
+    // typed result. The dialog runs in MAIN (the renderer has no file-system
+    // access by design — SURFACE_PLAN §7). Errors are encoded into the
+    // result; this promise never rejects in normal operation.
+    ipcRenderer.invoke(CH.PICK_WORKSPACE) as Promise<WorkspacePickResult>,
 
   // main → renderer
   onBus: (cb: (ev: BusEvent) => void): (() => void) => sub<BusEvent>(CH.BUS, cb),
