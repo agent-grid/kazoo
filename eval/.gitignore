@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# secrets
+.env
+!.env.example
+
+# build output
+dist/
+
+# local agent / workspace metadata
+.agent-grid/
+.claude/
+
+# eval run outputs (keep dirs via .gitkeep)
+logs/*
+artifacts/*
+reports/*
+!logs/.gitkeep
+!artifacts/.gitkeep
+!reports/.gitkeep
+
+# local ASR models / large binaries
+models/
+*.bin
+*.gguf
+
+# misc
+.DS_Store

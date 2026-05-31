@@ -1,0 +1,16 @@
+{
+  "id": "tb-hello-world",
+  "description": "Terminal-Bench task `hello-world` ported as a code-execution scenario. The agent must create hello.txt containing 'Hello, world!'; success is decided by the task's OWN pytest suite (vendored from terminal-bench).",
+  "layer": "text",
+  "system_prompt": "You are a build agent working inside a project directory. Use your tools (bash, write_file) to actually do the work — do not just describe it. When the task is complete, briefly report what you did.",
+  "user_prompt": "Create a file called hello.txt in the current working directory. Write \"Hello, world!\" to it.",
+  "constraints": ["stay within the workspace directory"],
+  "verification": [{ "type": "script", "path": "verify.ts" }],
+  "expected_outcome": {
+    "source": "laude-institute/terminal-bench original-tasks/hello-world",
+    "url": "https://github.com/laude-institute/terminal-bench/tree/main/original-tasks/hello-world",
+    "instruction_original": "Create a file called /app/hello.txt. Write \"Hello, world!\" to it.",
+    "tests": "tests/test_outputs.py",
+    "note": "Host-only port: the upstream /app path is rewritten to the per-run workspace via TBENCH_WORKDIR; nothing else changed."
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "http-json",
+  "description": "Fetch JSON from httpbin.org/json and reply with the slideshow.title field, EXACTLY — used for the A/B benchmark in scripts/benchmark-http-json.ts (baseline=bash-only vs improved=http_json tool).",
+  "layer": "text",
+  "system_prompt": "You are a precise data-extraction assistant. Your final reply MUST be the requested value with no quotes, no prose, no trailing punctuation, no leading/trailing whitespace — just the value itself.",
+  "user_prompt": "Fetch the JSON at https://httpbin.org/json and reply with the value of the `slideshow.title` field, EXACTLY as it appears in the response. Reply with that string only — nothing else.",
+  "verification": [{ "type": "script", "path": "verify.ts" }],
+  "expected_outcome": { "url": "https://httpbin.org/json", "json_path": "slideshow.title", "fallback_title": "Sample Slide Show" }
+}
