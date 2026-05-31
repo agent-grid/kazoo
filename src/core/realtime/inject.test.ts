@@ -45,8 +45,9 @@ function fakeSession(): FakeSession {
 function high(text: string): NarrationPhrase {
   return { text, source: 'preamble', salience: 0.9 }
 }
-function low(text: string): NarrationPhrase {
-  return { text, source: 'tool-summary', salience: 0.35 }
+function low(text: string, kind?: NarrationPhrase['kind']): NarrationPhrase {
+  const base: NarrationPhrase = { text, source: 'tool-summary', salience: 0.35 }
+  return kind ? { ...base, kind } : base
 }
 
 describe('queued injector — basic delivery', () => {
@@ -123,6 +124,53 @@ describe('queued injector — low-salience coalescing', () => {
     expect(f.spoken[1]).toBe('Reading through the project.')
     inj.onResponseDone() // -> the high-salience edit
     expect(f.spoken[2]).toBe('Editing config.ts.')
+    inj.close()
+  })
+})
+
+describe('queued injector — kind-based coalescing', () => {
+  it('coalesces a kind=read run into the read summary', () => {
+    const f = fakeSession()
+    const inj = createQueuedInjector(f.session, fakeLogger())
+    inj.speak(low('Opening a.ts.', 'read')) // in-flight
+    inj.speak(low('Opening b.ts.', 'read'))
+    inj.speak(low('Opening c.ts.', 'read'))
+    inj.onResponseDone()
+    expect(f.spoken[1]).toBe('Reading through the project.')
+    inj.close()
+  })
+
+  it('coalesces a mixed exploration burst (read + search + list + shell)', () => {
+    const f = fakeSession()
+    const inj = createQueuedInjector(f.session, fakeLogger())
+    inj.speak(low('Opening pkg.ts.', 'read')) // in-flight
+    inj.speak(low('Searching the code for "foo".', 'search'))
+    inj.speak(low('Looking for files matching "**/*.ts".', 'list'))
+    inj.speak(low('Looking through the project files.', 'shell'))
+    inj.onResponseDone()
+    expect(f.spoken[1]).toBe('Looking around the project.')
+    inj.close()
+  })
+
+  it('coalesces a pure search run into the search summary', () => {
+    const f = fakeSession()
+    const inj = createQueuedInjector(f.session, fakeLogger())
+    inj.speak(low('Searching the code for "a".', 'search')) // in-flight
+    inj.speak(low('Searching the code for "b".', 'search'))
+    inj.speak(low('Searching the code for "c".', 'search'))
+    inj.onResponseDone()
+    expect(f.spoken[1]).toBe('Searching the code.')
+    inj.close()
+  })
+
+  it('coalesces a pure read-only shell run into the shell summary', () => {
+    const f = fakeSession()
+    const inj = createQueuedInjector(f.session, fakeLogger())
+    inj.speak(low('Looking through the project files.', 'shell')) // in-flight
+    inj.speak(low('Looking through the project files.', 'shell'))
+    inj.speak(low("Checking what's changed.", 'shell'))
+    inj.onResponseDone()
+    expect(f.spoken[1]).toBe('Poking around in the shell.')
     inj.close()
   })
 })

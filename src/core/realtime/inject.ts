@@ -269,35 +269,70 @@ function isHigh(p: NarrationPhrase): boolean {
 }
 
 /** Pick a single summary phrase for a run of low-salience tool actions.
- *  Crude classifier on the phrase text — translator already shaped the
- *  per-tool descriptions to be recognizable.
- *  TODO(perf): if the translator grows more tool types, swap this string-
- *  matching for a phrase-kind tag carried on NarrationPhrase. */
+ *
+ *  Strategy: switch on the structured `kind` tag the translator attaches to
+ *  each phrase (read/search/list/shell/edit/other). If every phrase in the
+ *  run shares one kind we use that kind's specific summary; a mix of
+ *  exploration kinds (read + search + list + read-only shell) merges into
+ *  a single natural line. We fall back on the human text only for legacy
+ *  phrases that arrived without a `kind`. */
 function coalesceRun(run: readonly NarrationPhrase[]): NarrationPhrase {
-  let reads = 0
-  let greps = 0
-  let globs = 0
-  let other = 0
+  const counts: Record<NarrationKindLocal, number> = {
+    read: 0,
+    search: 0,
+    list: 0,
+    shell: 0,
+    edit: 0,
+    other: 0,
+  }
   for (const p of run) {
-    const t = p.text.toLowerCase()
-    if (t.startsWith('opening ') || t.startsWith('reading ')) reads++
-    else if (t.startsWith('searching ')) greps++
-    else if (t.startsWith('looking for ') || t.startsWith('listing ')) globs++
-    else other++
+    const k = inferKind(p)
+    counts[k]++
   }
-  let text: string
-  if (reads > 0 && greps === 0 && globs === 0 && other === 0) {
-    text = 'Reading through the project.'
-  } else if (greps > 0 && reads === 0 && globs === 0 && other === 0) {
-    text = 'Searching the code.'
-  } else if (globs > 0 && reads === 0 && greps === 0 && other === 0) {
-    text = 'Looking through the project files.'
-  } else if (reads + greps + globs > 0 && other === 0) {
-    text = 'Looking around the project.'
-  } else {
-    text = 'Working through some things.'
+  const text = pickSummary(counts)
+  return { text, source: 'tool-summary', salience: 0.55, kind: 'other' }
+}
+
+type NarrationKindLocal = NonNullable<NarrationPhrase['kind']>
+
+/** Map a phrase to its kind. If `kind` is set we trust it; otherwise we
+ *  fall back to the same string-prefix heuristic the previous coalescer
+ *  used so legacy callers don't regress. */
+function inferKind(p: NarrationPhrase): NarrationKindLocal {
+  if (p.kind) return p.kind
+  const t = p.text.toLowerCase()
+  if (t.startsWith('opening ') || t.startsWith('reading ')) return 'read'
+  if (t.startsWith('searching ')) return 'search'
+  if (t.startsWith('looking for ') || t.startsWith('listing ')) return 'list'
+  if (t.startsWith('editing ') || t.startsWith('writing ')) return 'edit'
+  if (t.startsWith('running ')) return 'shell'
+  return 'other'
+}
+
+function pickSummary(counts: Record<NarrationKindLocal, number>): string {
+  const { read, search, list, shell, edit, other } = counts
+  const exploration = read + search + list + shell
+  // Pure single-kind runs: use the specific summary.
+  if (read > 0 && search === 0 && list === 0 && shell === 0 && edit === 0 && other === 0) {
+    return 'Reading through the project.'
   }
-  return { text, source: 'tool-summary', salience: 0.55 }
+  if (search > 0 && read === 0 && list === 0 && shell === 0 && edit === 0 && other === 0) {
+    return 'Searching the code.'
+  }
+  if (list > 0 && read === 0 && search === 0 && shell === 0 && edit === 0 && other === 0) {
+    return 'Looking through the project files.'
+  }
+  if (shell > 0 && read === 0 && search === 0 && list === 0 && edit === 0 && other === 0) {
+    return 'Poking around in the shell.'
+  }
+  // Mixed exploration (reads + finds + greps + read-only shell) → one line.
+  if (exploration > 0 && edit === 0 && other === 0) {
+    return 'Looking around the project.'
+  }
+  // Anything with `other` in it — keep the catch-all but make it sound
+  // less like a shrug. Empty-run is impossible (coalesceRun is only called
+  // with run.length >= 2).
+  return 'Working through a few things.'
 }
 
 /** Naive passthrough — kept for tests / non-queueing callers. Not used by
