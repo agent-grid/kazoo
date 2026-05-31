@@ -4,6 +4,8 @@
 
 ### Talk to a coding agent. Hear it think out loud.
 
+**[▶ Watch the demo](https://youtu.be/L2GWHgEh0Ao)**
+
 </div>
 
 ---
@@ -208,6 +210,12 @@ npm run build        # electron-vite build → out/
 npm run package      # build + electron-builder
 npm run package:dir  # unpacked build (--dir)
 ```
+
+---
+
+## Evals
+
+An evaluation harness lives under [`eval/`](./eval/) for benchmarking voice coding agents (Kazoo included) against scenario suites. Run all scenarios with `bun eval run`, then `bun eval report` for a per-agent summary (score, pass/fail/error, latency, cost). API keys go in `eval/.env` — see `eval/.env.example`. Full details in [`eval/README.md`](./eval/README.md).
 
 ---
 
