@@ -1,0 +1,19 @@
+{
+  "name": "voice-eval",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Headless evaluation harness for real-time voice agents (text baseline + speech-to-speech).",
+  "type": "module",
+  "module": "src/cli.ts",
+  "scripts": {
+    "eval": "bun run src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.2"
+  }
+}

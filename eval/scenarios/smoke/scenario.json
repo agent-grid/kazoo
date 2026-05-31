@@ -1,0 +1,10 @@
+{
+  "id": "smoke",
+  "description": "Minimal Realtime API connectivity + response check (text layer baseline).",
+  "layer": "text",
+  "system_prompt": "You are a concise assistant. Answer in as few words as possible.",
+  "user_prompt": "Reply with exactly one word: pong",
+  "tools_allowed": [],
+  "verification": [{ "type": "script" }],
+  "expected_outcome": { "contains": "pong" }
+}

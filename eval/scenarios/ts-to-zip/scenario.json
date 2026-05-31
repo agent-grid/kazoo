@@ -1,0 +1,11 @@
+{
+  "id": "ts-to-zip",
+  "description": "Compile a TypeScript file, package the output into a zip, report the SHA-256 hash.",
+  "layer": "text",
+  "system_prompt": "You are a build agent. Use the provided tools to complete the task.",
+  "user_prompt": "I have a TypeScript file here. Compile it to JavaScript, then package into dist/build.zip.",
+  "constraints": ["stay within the workspace directory"],
+  "verification": [{ "type": "script", "path": "verify.ts" }],
+  "workspace_seed": "workspace",
+  "expected_outcome": { "compiled": "dist/index.js", "zip": "dist/build.zip" }
+}
