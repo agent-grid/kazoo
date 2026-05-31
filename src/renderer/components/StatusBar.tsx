@@ -5,7 +5,8 @@
 //   <ModeToggle>    flow ⇄ high-level; mirrors the `narration-mode` bus event
 //                   and calls window.kazoo.setMode on click
 //   session-state   orchestrator FSM word + connection
-//   <WorkspaceDir>  the executor cwd from SESSION_INFO
+//   <WorkspaceDir>  the executor cwd from SESSION_INFO + click-to-change
+//                   (main shows the native directory picker)
 //   <Clock>         call duration
 
 import { useEffect, useRef, useState } from 'react'
@@ -24,7 +25,16 @@ export type StatusBarProps = {
   cwd: string | null
   /** Whether the call is live, to drive the clock. */
   live: boolean
+  /** A short transient message displayed inline next to the workspace dir
+   *  (e.g. picker errors or cancellation). null when nothing to show. */
+  workspaceNotice: string | null
   onSetMode: (mode: NarrationMode) => void
+  /** Open the native directory picker. The handler in App owns the result;
+   *  this component just triggers + dims while in flight. */
+  onPickWorkspace: () => void
+  /** True while the picker dialog is open. Disables the button so we never
+   *  open two dialogs. */
+  picking: boolean
 }
 
 export function StatusBar(props: StatusBarProps): React.JSX.Element {
@@ -37,7 +47,28 @@ export function StatusBar(props: StatusBarProps): React.JSX.Element {
         <span>·</span>
         <span>{connectionWord(props.connection)}</span>
       </span>
-      <span className="status-seg spacer status-dir">{props.cwd ?? '~'}</span>
+      <span className="status-seg spacer status-dir">
+        <button
+          type="button"
+          className="workspace-pick"
+          title={
+            props.live
+              ? 'Hang up to change the workspace'
+              : 'Change Kazoo workspace directory'
+          }
+          onClick={props.onPickWorkspace}
+          // Disabled mid-call (any state other than idle/ended) AND while a
+          // picker dialog is already open. Main also refuses the swap if a
+          // call is live, so this is a UX hint, not the load-bearing guard.
+          disabled={props.picking || (props.live && props.fsm !== 'ended')}
+        >
+          <span className="workspace-pick-label">cwd</span>
+          <span className="workspace-pick-path">{props.cwd ?? '~'}</span>
+        </button>
+        {props.workspaceNotice !== null && (
+          <span className="workspace-notice">{props.workspaceNotice}</span>
+        )}
+      </span>
       <Clock live={props.live} fsm={props.fsm} />
     </footer>
   )

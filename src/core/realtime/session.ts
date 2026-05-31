@@ -21,13 +21,16 @@
 // `handleServerEvent` below and the `session.update` payload.
 
 import WebSocket from 'ws'
+import type { RealtimeReasoningEffort } from '../config.ts'
 import type { Logger } from '../lib/logger.ts'
 import type { RealtimeEvent, RealtimeEventHandler, RealtimeSessionState } from './events.ts'
 
 const REALTIME_URL_BASE = 'wss://api.openai.com/v1/realtime'
 
-/** OpenAI's GA model alias. `gpt-realtime-mini` is also valid. */
-export const DEFAULT_MODEL = 'gpt-realtime'
+/** OpenAI's GA model alias. `gpt-realtime-2` (GA 2026-05) is the current
+ *  default; `gpt-realtime` and `gpt-realtime-mini` remain available. The model
+ *  is selected via `KAZOO_REALTIME_MODEL` / `loadConfig()`. */
+export const DEFAULT_MODEL = 'gpt-realtime-2'
 /** Always GA-available. Other voices may require account verification. */
 export const DEFAULT_VOICE = 'alloy'
 
@@ -101,6 +104,12 @@ export type RealtimeSessionArgs = {
    *  have already clamped to the API's [0.25, 1.5] window; omit to use the
    *  API default (1.0). */
   speed?: number
+  /** Maps to `reasoning.effort` (NESTED) on session.update. Only meaningful
+   *  for `gpt-realtime-2` (GA 2026-05); the whole nested `reasoning` object
+   *  is omitted when `undefined`, which keeps `gpt-realtime` (the previous
+   *  default) working unchanged. The caller (`loadConfig()`) validates the
+   *  enum and normalizes the `very-high` alias to the on-wire `xhigh`. */
+  reasoningEffort?: RealtimeReasoningEffort
   instructions: string
   onEvent: RealtimeEventHandler
   logger: Logger
@@ -135,6 +144,7 @@ export class RealtimeSession {
   private readonly apiKey: string
   private readonly model: string
   private readonly speed: number | undefined
+  private readonly reasoningEffort: RealtimeReasoningEffort | undefined
   private readonly instructions: string
   private readonly onEvent: RealtimeEventHandler
   private readonly logger: Logger
@@ -166,6 +176,7 @@ export class RealtimeSession {
     // it on a voice-not-available error and resend session.update.
     this.voice = args.voice || DEFAULT_VOICE
     this.speed = args.speed
+    this.reasoningEffort = args.reasoningEffort
     this.instructions = args.instructions || ''
     this.onEvent = args.onEvent
     this.logger = args.logger
@@ -442,6 +453,19 @@ export class RealtimeSession {
         model: this.model,
         output_modalities: ['audio'],
         instructions: this.instructions,
+        // `gpt-realtime-2` (GA 2026-05) introduced per-session reasoning
+        // effort. The wire shape is NESTED — `reasoning: { effort: <level> }`
+        // — not a flat `reasoning_effort` field (the server silently drops
+        // that). On-wire values mirror the Responses API:
+        // `minimal | low | medium | high | xhigh`. The whole `reasoning`
+        // object is omitted when `undefined`, which keeps the payload
+        // compatible with `gpt-realtime` (the previous default) for any
+        // operator who's still pinned to it. The valid set, default ("low"),
+        // and the `very-high` → `xhigh` alias are all enforced in
+        // `loadConfig()`.
+        ...(this.reasoningEffort !== undefined
+          ? { reasoning: { effort: this.reasoningEffort } }
+          : {}),
         // SUPERVISOR_SPEC §2c/§2d. The model decides answer-vs-delegate-vs-stop
         // itself via these two tools; the orchestrator only forwards the
         // resulting call. `tool_choice: 'auto'` lets the model also answer

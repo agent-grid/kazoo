@@ -19,15 +19,18 @@ import type { Orchestrator } from '../core/orchestrator/loop.ts'
 
 export type LifecycleDeps = {
   app: App
-  orchestrator: Orchestrator
-  executor: ExecutorRunner
+  /** Reads the CURRENT orchestrator — indirected through a getter so a
+   *  workspace swap mid-flight points us at the live stack to tear down. */
+  getOrchestrator: () => Orchestrator
+  /** Reads the CURRENT executor — same rationale as `getOrchestrator`. */
+  getExecutor: () => ExecutorRunner
   logger: Logger
 }
 
 /** Register the graceful-shutdown hook. Idempotent teardown — repeated quit
  *  requests during shutdown are ignored. */
 export function installLifecycle(deps: LifecycleDeps): void {
-  const { app, orchestrator, executor } = deps
+  const { app, getOrchestrator, getExecutor } = deps
   const log = deps.logger.child({ mod: 'lifecycle' })
 
   let shuttingDown = false
@@ -42,7 +45,7 @@ export function installLifecycle(deps: LifecycleDeps): void {
 
     void (async () => {
       try {
-        await orchestrator.stop()
+        await getOrchestrator().stop()
       } catch (err) {
         log.warn(
           { err: err instanceof Error ? err.message : String(err) },
@@ -50,7 +53,7 @@ export function installLifecycle(deps: LifecycleDeps): void {
         )
       }
       try {
-        await executor.close()
+        await getExecutor().close()
       } catch (err) {
         log.warn(
           { err: err instanceof Error ? err.message : String(err) },

@@ -7,6 +7,29 @@ import { resolve } from 'node:path'
 import { KazooError } from './lib/errors.ts'
 import { resolveMemoryPaths } from './memory/store.ts'
 
+/** Per-session reasoning effort knob introduced by `gpt-realtime-2` (GA
+ *  2026-05). Mirrors the Responses-API effort scale. The wire shape is
+ *  `reasoning: { effort: <level> }` NESTED under the `session` object on
+ *  `session.update` — NOT a flat `reasoning_effort` field (the server
+ *  silently drops that). See `src/core/realtime/session.ts`. When unset we
+ *  OMIT the nested object entirely — backward-safe for any realtime model
+ *  that doesn't accept the knob.
+ *
+ *  The documented top tier is `xhigh` (not `very-high`). We accept the more
+ *  intuitive `very-high` as an INPUT alias that normalizes to `xhigh`, but
+ *  the on-wire token is always `xhigh`. */
+export const REALTIME_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const
+export type RealtimeReasoningEffort = (typeof REALTIME_REASONING_EFFORTS)[number]
+
+/** Input aliases the operator may type in the env var. Normalized to the
+ *  on-wire token by `parseReasoningEffort`. Kept tiny on purpose — this is a
+ *  forgiving spelling, not a general translation table. */
+const REASONING_EFFORT_ALIASES: Record<string, RealtimeReasoningEffort> = {
+  'very-high': 'xhigh',
+  veryhigh: 'xhigh',
+  very_high: 'xhigh',
+}
+
 export type Config = {
   openaiApiKey: string
   /** Executor auth — at least one is required to actually USE the executor,
@@ -21,6 +44,13 @@ export type Config = {
     model: string
     voice: string
     speed: number | undefined
+    /** OpenAI `gpt-realtime-2` (GA 2026-05) added per-session reasoning effort.
+     *  On-wire values: `minimal | low | medium | high | xhigh`. Operators may
+     *  also type the alias `very-high` (→ `xhigh`) in the env. `undefined`
+     *  means "don't send the nested `reasoning` object at all" — keeps the
+     *  wire payload backward-safe for any realtime model that doesn't accept
+     *  the knob. */
+    reasoningEffort: RealtimeReasoningEffort | undefined
   }
   executor: {
     model: string
@@ -53,6 +83,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     )
   }
 
+  // `gpt-realtime-2` added a `reasoning_effort` knob. Default to `low` so the
+  // narrator stays snappy out of the box; set explicitly to opt into deeper
+  // (slower) reasoning. We accept the value even on the older `gpt-realtime`
+  // model — the realtime session simply omits it from the wire payload when
+  // the field is `undefined`, so misconfiguring the model name won't crash;
+  // it just means the operator's effort knob is ignored.
+  const effortRaw = env.KAZOO_REALTIME_REASONING_EFFORT?.trim()
+  const reasoningEffort = parseReasoningEffort(effortRaw)
+
   const memory = resolveMemoryPaths({
     userMemoryPath: env.KAZOO_USER_MEMORY_PATH,
     projectMemoryPath: env.KAZOO_PROJECT_MEMORY_PATH,
@@ -62,9 +101,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     openaiApiKey,
     anthropic: { oauthToken, apiKey },
     realtime: {
-      model: env.KAZOO_REALTIME_MODEL || 'gpt-realtime',
+      // `gpt-realtime-2` is OpenAI's GA speech-to-speech model (released
+      // 2026-05). It supersedes `gpt-realtime` and adds per-session
+      // `reasoning_effort`. Operators on the older model can pin via
+      // `KAZOO_REALTIME_MODEL=gpt-realtime`.
+      model: env.KAZOO_REALTIME_MODEL || 'gpt-realtime-2',
       voice: env.KAZOO_REALTIME_VOICE || 'alloy',
       speed,
+      reasoningEffort,
     },
     executor: {
       model: env.KAZOO_EXECUTOR_MODEL || 'claude-sonnet-4-6',
@@ -92,6 +136,28 @@ function required(env: NodeJS.ProcessEnv, key: string): string {
     throw new KazooError('config/missing-env', `Missing required env var ${key}`)
   }
   return v
+}
+
+/** Parse + validate `KAZOO_REALTIME_REASONING_EFFORT`. Empty/unset → `low`
+ *  (the snappy default for the narrator persona). An unrecognized value is a
+ *  fail-fast `KazooError` rather than a silent fallback so a typo can't get
+ *  shipped to OpenAI and rejected at session.update time.
+ *
+ *  Accepts intuitive aliases (`very-high` / `veryhigh` / `very_high`) and
+ *  normalizes them to the documented on-wire token (`xhigh`). */
+function parseReasoningEffort(raw: string | undefined): RealtimeReasoningEffort | undefined {
+  if (raw === undefined || raw === '') return 'low'
+  const lower = raw.toLowerCase()
+  const aliased = REASONING_EFFORT_ALIASES[lower]
+  if (aliased !== undefined) return aliased
+  if ((REALTIME_REASONING_EFFORTS as readonly string[]).includes(lower)) {
+    return lower as RealtimeReasoningEffort
+  }
+  throw new KazooError(
+    'config/missing-env',
+    `KAZOO_REALTIME_REASONING_EFFORT must be one of ${REALTIME_REASONING_EFFORTS.join(' | ')} ` +
+      `(alias: very-high → xhigh); got "${raw}"`,
+  )
 }
 
 /** Resolve the executor workspace path. Default: `~/kazoo-workspace`.
