@@ -7,6 +7,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "ELECTRON_DISABLE_SANDBOX=1 electron-vite dev",
+    "eval": "bun eval/src/cli.ts",
     "build": "electron-vite build",
     "typecheck": "tsc -b",
     "test": "vitest run",

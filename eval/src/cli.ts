@@ -2,8 +2,12 @@
  * voice-eval CLI. See ../initial-spec.md for the full design.
  * Minimal surface: `run` (all scenarios × all agents by default) and `report`.
  */
+import { loadEnv } from "./env";
 import { runAll, listScenarios, listAgentIds } from "./run";
 import { report } from "./report";
+
+// Load eval/.env (anchored to the package root) before any adapter reads keys.
+loadEnv();
 
 const USAGE = `voice-eval - headless evaluation harness for real-time voice agents
 
