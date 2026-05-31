@@ -1,0 +1,12 @@
+{
+  "id": "explain-code",
+  "description": "Read a small source file and explain what it does in plain English. Open-ended output graded by an LLM judge.",
+  "layer": "text",
+  "system_prompt": "You are a careful code reader. Use the read_file tool to inspect files before answering. Keep your final answer plain prose (no code blocks).",
+  "user_prompt": "Read the file src/mystery.ts in your workspace and explain in 2-3 sentences what the exported function does and one non-obvious edge case it handles. Do not paste the code back — explain it.",
+  "workspace_seed": "workspace",
+  "verification": [{ "type": "llm_judge", "threshold": 0.7 }],
+  "expected_outcome": {
+    "rubric": "The response must (a) correctly identify the function as a binary search over a sorted array that returns the found index or -1 when absent, (b) describe the core mechanic (repeatedly halving the search interval using lo/hi/mid), and (c) call out at least one non-obvious edge case actually present in the code -- either the overflow-safe midpoint computation 'lo + ((hi - lo) >> 1)' (vs the naive '(lo + hi) / 2'), OR the use of an EXCLUSIVE upper bound 'hi = arr.length' with loop condition 'lo < hi'. Award full credit only if (a), (b), and (c) are all clearly present. Partial credit if (a) and (b) are correct but (c) is vague or wrong. Fail (<=0.3) if the function is misidentified (e.g. called linear search, sort, or something unrelated)."
+  }
+}

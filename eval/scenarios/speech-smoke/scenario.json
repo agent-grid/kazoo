@@ -1,0 +1,11 @@
+{
+  "id": "speech-smoke",
+  "description": "Minimal Realtime API speech-layer smoke check: send a short user audio turn, transcribe the agent's audio reply with the reference ASR, assert the expected phrase.",
+  "layer": "speech",
+  "system_prompt": "You are a concise voice assistant. Reply with one short spoken sentence — no preamble, no questions.",
+  "user_prompt": "Please say exactly: pong from voice eval.",
+  "input_text": "Please say exactly: pong from voice eval.",
+  "tools_allowed": [],
+  "verification": [{ "type": "script" }],
+  "expected_outcome": { "contains": "pong" }
+}
