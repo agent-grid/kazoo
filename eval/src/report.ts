@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { REPORTS_DIR } from "./paths";
 import { c } from "./util/colors";
 
 interface RunReport {
@@ -33,7 +34,7 @@ export function report(runId?: string) {
 
 /** Most recent persisted report per (scenario, agent). */
 function loadLatestReports(): RunReport[] {
-  const dir = resolve("reports");
+  const dir = REPORTS_DIR;
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir)
     .filter((f) => f.endsWith(".json") && !f.startsWith("."))
@@ -51,7 +52,7 @@ function loadLatestReports(): RunReport[] {
 }
 
 function printRun(runId: string) {
-  const dir = resolve("reports");
+  const dir = REPORTS_DIR;
   const file = resolve(dir, runId.endsWith(".json") ? runId : `${runId}.json`);
   if (!existsSync(file)) {
     console.error(`no report found: ${file}`);

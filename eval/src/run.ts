@@ -9,6 +9,7 @@ import type { Scenario, VerifierResult } from "./scenario";
 import { judge } from "./judge";
 import { printAgentSummary, type RunOutcome } from "./report";
 import { c } from "./util/colors";
+import { ARTIFACTS_DIR, AGENTS_DIR, REPORTS_DIR, SCENARIOS_DIR, resolveScenarioDir } from "./paths";
 import { pcm16ToWav, wavToPcm16 } from "./util/wav";
 import { synthesizePcm16 } from "./tts";
 import { transcribe } from "./asr";
@@ -16,13 +17,13 @@ import { transcribe } from "./asr";
 const MODEL = process.env.VOICE_EVAL_MODEL || "gpt-realtime";
 
 export async function runScenario(scenarioDir: string, agentId: string) {
-  const scenario = loadScenario(scenarioDir);
+  const scenario = loadScenario(resolveScenarioDir(scenarioDir));
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set (copy .env.example to .env)");
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const runId = `${stamp}_${scenario.id}_${agentId}`;
-  const runDir = resolve("artifacts", runId);
+  const runDir = resolve(ARTIFACTS_DIR, runId);
   const workspaceDir = resolve(runDir, "workspace");
   mkdirSync(runDir, { recursive: true });
   seedWorkspace(workspaceDir, scenario.workspace_seed ? resolve(scenario.dir, scenario.workspace_seed) : undefined);
@@ -88,8 +89,8 @@ export async function runScenario(scenarioDir: string, agentId: string) {
   };
   writeFileSync(resolve(runDir, "report.json"), JSON.stringify(report, null, 2));
   writeFileSync(resolve(runDir, "trace.json"), JSON.stringify(trace.events, null, 2));
-  mkdirSync(resolve("reports"), { recursive: true });
-  writeFileSync(resolve("reports", `${runId}.json`), JSON.stringify(report, null, 2));
+  mkdirSync(REPORTS_DIR, { recursive: true });
+  writeFileSync(resolve(REPORTS_DIR, `${runId}.json`), JSON.stringify(report, null, 2));
 
   const scoreColor = score.pass ? c.green : c.red;
   console.log(`\n  ${c.bold("SCORE:")} ${scoreColor(`${score.total}/100`)}  ${score.pass ? c.green("✓ PASS") : c.red("✗ FAIL")}`);
@@ -220,7 +221,7 @@ function builtinContains(text: string, needle?: string): VerifierResult {
 
 /** Discover scenario directories (subdirs of scenarios/ that contain scenario.json). */
 export function listScenarios(): string[] {
-  const root = resolve("scenarios");
+  const root = SCENARIOS_DIR;
   if (!existsSync(root)) return [];
   return readdirSync(root)
     .map((d) => resolve(root, d))
@@ -233,8 +234,6 @@ export function listScenarios(): string[] {
     })
     .sort();
 }
-
-const AGENTS_DIR = resolve("agents");
 
 /** Discover agent ids from agents/*.ts (base.ts is shared, not an agent). */
 export function listAgentIds(): string[] {

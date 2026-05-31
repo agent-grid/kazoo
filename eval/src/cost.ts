@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { REPORTS_DIR } from "./paths";
 import type { Usage } from "../agents/base";
 
 /**
@@ -18,7 +19,7 @@ export function computeCost(model: string, u: Usage): number {
   return ((u.inputTokens ?? 0) / 1e6) * p.in + ((u.outputTokens ?? 0) / 1e6) * p.out;
 }
 
-const HIST = resolve("reports", ".cost-history.json");
+const HIST = resolve(REPORTS_DIR, ".cost-history.json");
 
 function load(): Record<string, number[]> {
   try {
@@ -32,7 +33,7 @@ export function recordCost(scenario: string, agent: string, cost: number) {
   const h = load();
   const key = `${scenario}::${agent}`;
   (h[key] ??= []).push(cost);
-  mkdirSync(resolve("reports"), { recursive: true });
+  mkdirSync(REPORTS_DIR, { recursive: true });
   writeFileSync(HIST, JSON.stringify(h));
 }
 
