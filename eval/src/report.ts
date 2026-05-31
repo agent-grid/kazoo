@@ -8,6 +8,7 @@ interface RunReport {
   scenario: string;
   agent: string;
   layer?: string;
+  mode?: string;
   model?: string;
   score: number;
   pass: boolean;
@@ -59,7 +60,7 @@ function printRun(runId: string) {
     process.exit(1);
   }
   const r = JSON.parse(readFileSync(file, "utf8")) as RunReport;
-  console.log(`\n${c.boldCyan(r.scenario)} ${c.dim(`via ${r.agent} [${r.layer}] model=${r.model}`)}`);
+  console.log(`\n${c.boldCyan(r.scenario)} ${c.dim(`via ${r.agent} [${r.layer}${r.mode && r.mode !== r.layer ? `→${r.mode}` : ""}] model=${r.model}`)}`);
   console.log(`  ${c.bold("SCORE:")} ${(r.pass ? c.green : c.red)(`${r.score}/100`)}  ${r.pass ? c.green("✓ PASS") : c.red("✗ FAIL")}`);
   for (const [k, v] of Object.entries(r.components ?? {})) {
     const val = Math.round((v as number) * 100);

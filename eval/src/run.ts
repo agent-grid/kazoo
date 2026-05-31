@@ -33,10 +33,13 @@ export async function runScenario(scenarioDir: string, agentId: string) {
   console.log(c.dim(`  est. cost: ${est == null ? "n/a (no history yet)" : "$" + est.toFixed(4)}`));
 
   const adapter = await loadAgent(agentId);
+  const mode = chooseMode(scenario, adapter);
   await adapter.connect({
     apiKey,
     model: MODEL,
-    layer: scenario.layer,
+    // Tell the adapter which execution layer it will be driven through —
+    // this may differ from scenario.layer when we cascade across layers.
+    layer: mode === "speech" || mode === "cascade-tts-out" ? "speech" : "text",
     instructions: scenario.system_prompt,
     workspaceDir,
   });
@@ -47,13 +50,61 @@ export async function runScenario(scenarioDir: string, agentId: string) {
     else if (e.type === "error") console.log(c.red(`  ✖ error: ${e.message}`));
   };
 
+  console.log(c.dim(`  ◌ mode: ${mode}`));
+
   let trace: TurnTrace;
   let speechArtifacts: SpeechArtifacts | undefined;
-  if (scenario.layer === "speech") {
+  if (mode === "speech") {
     speechArtifacts = await runSpeechTurn(adapter, scenario, runDir, live);
     trace = speechArtifacts.trace;
-  } else {
+  } else if (mode === "text") {
     trace = await adapter.runText(scenario.user_prompt, live);
+  } else if (mode === "cascade-asr-in") {
+    // Speech scenario, text-only agent: STT the user audio into a transcript
+    // and feed that to runText — exactly what a cascaded STT→LLM stack does.
+    const { inputWav, source } = await resolveInputWav(scenario, runDir);
+    const wav = readFileSync(inputWav);
+    const asr = await transcribe(wav);
+    console.log(
+      c.dim(
+        `  ◌ cascade-asr-in: ${source} → asr (${asr.model}) → runText: ${asr.text.slice(0, 100)}`,
+      ),
+    );
+    trace = await adapter.runText(asr.text || scenario.user_prompt, live);
+  } else {
+    // cascade-tts-out: Text scenario, speech-only agent. TTS the prompt to
+    // PCM16, runAudio, ASR the output back to text for verifiers/scoring.
+    if (typeof adapter.runAudio !== "function") {
+      throw new Error(`agent '${adapter.id}' lacks runAudio() for cascade-tts-out`);
+    }
+    console.log(c.dim(`  ◌ cascade-tts-out: tts(user_prompt) → runAudio → asr`));
+    const inPcm = await synthesizePcm16(scenario.user_prompt);
+    const inputWavPath = resolve(runDir, "input.wav");
+    writeFileSync(inputWavPath, pcm16ToWav(inPcm));
+    trace = await adapter.runAudio(inPcm, live);
+
+    let outputWavPath: string | undefined;
+    let asrText = "";
+    let asrModel = process.env.VOICE_EVAL_ASR_MODEL || "whisper-1";
+    if (trace.outputAudio?.length) {
+      outputWavPath = resolve(runDir, "output.wav");
+      writeFileSync(outputWavPath, pcm16ToWav(trace.outputAudio));
+      const r = await transcribe(readFileSync(outputWavPath));
+      asrText = r.text;
+      asrModel = r.model;
+      trace.finalText = asrText;
+      console.log(c.dim(`  ◌ asr (${asrModel}): ${asrText}`));
+    }
+    speechArtifacts = {
+      trace,
+      report: {
+        inputWav: inputWavPath,
+        inputSource: "tts",
+        outputWav: outputWavPath,
+        asrModel,
+        asrTranscript: asrText,
+      },
+    };
   }
   await adapter.close();
   console.log(`  ${c.dim("⤷ final:")} ${trace.finalText.slice(0, 200) || c.dim("(empty)")}`);
@@ -82,7 +133,7 @@ export async function runScenario(scenarioDir: string, agentId: string) {
   recordCost(scenario.id, agentId, cost);
 
   const report = {
-    runId, scenario: scenario.id, agent: agentId, layer: scenario.layer, model: MODEL,
+    runId, scenario: scenario.id, agent: agentId, layer: scenario.layer, mode, model: MODEL,
     score: score.total, pass: score.pass, components: score.components, metrics: score.metrics,
     verifiers: verifierResults, usage: trace.usage, cost_usd: cost, finalText: trace.finalText,
     ...(speechArtifacts ? { speech: speechArtifacts.report } : {}),
@@ -147,7 +198,7 @@ async function runSpeechTurn(
   if (typeof adapter.runAudio !== "function") {
     throw new Error(`agent '${adapter.id}' does not implement runAudio()`);
   }
-  const { inputWav, source } = await resolveInputWav(scenario);
+  const { inputWav, source } = await resolveInputWav(scenario, runDir);
   const { pcm } = wavToPcm16(readFileSync(inputWav));
   console.log(
     c.dim(
@@ -192,20 +243,51 @@ async function runSpeechTurn(
 /** Find or synthesize the user's input audio for a speech scenario. */
 async function resolveInputWav(
   scenario: Scenario,
+  runDir: string,
 ): Promise<{ inputWav: string; source: "fixture" | "tts" }> {
   const explicit = scenario.input_audio
     ? resolve(scenario.dir, scenario.input_audio)
     : undefined;
-  const fallback = resolve(scenario.dir, "input.wav");
-  for (const p of [explicit, fallback]) {
+  const fixturePath = resolve(scenario.dir, "input.wav");
+  for (const p of [explicit, fixturePath]) {
     if (p && existsSync(p)) return { inputWav: p, source: "fixture" };
   }
   // No fixture: synthesize via TTS so the harness still runs end-to-end.
+  // Write into the run's artifact dir (not the scenario dir) so we don't
+  // mutate the scenario on disk.
   const text = scenario.input_text ?? scenario.user_prompt;
   console.log(c.dim(`  ◌ no input.wav found — TTS-synthesizing from scenario text`));
   const pcm = await synthesizePcm16(text);
-  writeFileSync(fallback, pcm16ToWav(pcm));
-  return { inputWav: fallback, source: "tts" };
+  const out = resolve(runDir, "input.wav");
+  writeFileSync(out, pcm16ToWav(pcm));
+  return { inputWav: out, source: "tts" };
+}
+
+export type RunMode = "text" | "speech" | "cascade-asr-in" | "cascade-tts-out";
+
+/**
+ * Bridge scenario layer ↔ agent capabilities. Adapters stay honest about
+ * what they natively support; the harness cascades through TTS/ASR when the
+ * two sides don't match so every (scenario × agent) cell can execute.
+ */
+function chooseMode(scenario: Scenario, adapter: AgentAdapter): RunMode {
+  const caps = adapter.capabilities();
+  const layers = new Set(caps.layers);
+  const hasAudio = typeof adapter.runAudio === "function";
+  const hasText = layers.has("text");
+  if (scenario.layer === "text") {
+    if (hasText) return "text";
+    if (hasAudio) return "cascade-tts-out";
+    throw new Error(
+      `agent '${adapter.id}' supports neither text nor audio — cannot run any scenario`,
+    );
+  }
+  // speech scenario
+  if (layers.has("speech") && hasAudio) return "speech";
+  if (hasText) return "cascade-asr-in";
+  throw new Error(
+    `agent '${adapter.id}' cannot service speech scenario (no runAudio, no text fallback)`,
+  );
 }
 
 function relativeToCwd(p: string): string {
@@ -248,7 +330,16 @@ export function listAgentIds(): string[] {
 async function loadAgent(id: string): Promise<AgentAdapter> {
   const file = resolve(AGENTS_DIR, `${id}.ts`);
   if (!existsSync(file)) throw new Error(`unknown agent '${id}' (no agents/${id}.ts)`);
-  const mod = await import(file);
+  let mod: any;
+  try {
+    mod = await import(file);
+  } catch (e: any) {
+    // Surface the underlying import failure clearly — earlier versions of
+    // this loader had no try/catch, and a transient resolution failure for
+    // a heavy adapter (e.g. kazoo.ts, which transitively imports the
+    // realtime + executor subgraph) could be misattributed downstream.
+    throw new Error(`failed to import agent '${id}' (${file}): ${e?.message ?? e}`);
+  }
   const Adapter = mod.default;
   if (typeof Adapter !== "function") {
     throw new Error(`agents/${id}.ts must default-export an AgentAdapter class`);
