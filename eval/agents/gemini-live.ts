@@ -389,6 +389,7 @@ export default class GeminiLiveAdapter implements AgentAdapter {
       events: this.events,
       finalText: this.finalText.trim(),
       usage: this.usage,
+      model: this.model,
     };
   }
 

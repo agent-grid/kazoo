@@ -398,6 +398,7 @@ export default class OpenAIRealtimeAdapter implements AgentAdapter {
       events: this.events,
       finalText: this.finalText.trim(),
       usage: this.usage,
+      model: this.cfg.model,
       ...(outputAudio ? { outputAudio } : {}),
     };
   }

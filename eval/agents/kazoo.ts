@@ -25,6 +25,7 @@ import type {
   TurnTrace,
   Usage,
 } from "./base";
+import { PRICING } from "../src/cost.ts";
 
 // Reuse Kazoo's brain + voice + persona verbatim. Bun resolves the .ts
 // extensions natively; module resolution walks up to ../../node_modules for
@@ -86,6 +87,15 @@ export default class KazooAdapter implements AgentAdapter {
   private onEvent?: (e: CanonicalEvent) => void;
 
   // Turn-completion bookkeeping.
+  // Char-counted estimators for cost. ExecutorRunner doesn't expose token
+  // usage through its high-level streaming surface today (Claude Agent SDK
+  // gap), and RealtimeSession's normalized event stream drops the raw
+  // response.done.usage payload — so we estimate both from observed bytes
+  // and transcript characters and flag the usage as `estimated: true`. The
+  // realtime side is priced under REALTIME_MODEL; the executor side is
+  // costed under EXECUTOR_MODEL and folded in via Usage.extraCostUsd.
+  private executorUserChars = 0; // user-side prompt chars sent to executor
+  private executorAssistantChars = 0; // assistant text emitted by executor
   private executorBusy = false;
   private lastAudioAt = 0;
   private audioDoneAt = 0;
@@ -228,10 +238,45 @@ export default class KazooAdapter implements AgentAdapter {
       ? concatBytes(this.audioChunks)
       : undefined;
 
+    // ----- Usage estimation -----
+    // Realtime tokens (priced under REALTIME_MODEL):
+    //   - input ≈ user PCM seconds × ~50 tok/s (Realtime audio input rate)
+    //     + supervisor system prompt chars / 4
+    //   - output ≈ assistant transcript chars / 4 + output PCM sec × ~50 tok/s
+    // Executor tokens (priced under EXECUTOR_MODEL):
+    //   - input  ≈ executorUserChars / 4 (the prompt the supervisor delegated)
+    //   - output ≈ executorAssistantChars / 4 (text the executor streamed back)
+    // Both are heuristic — Usage.estimated = true is set so reports stay honest.
+    const inAudioSec = pcm16.length / (24000 * 2);
+    const outAudioBytes = outputAudio?.length ?? 0;
+    const outAudioSec = outAudioBytes / (24000 * 2);
+    const systemPromptChars = (this.cfg.instructions ?? "").length;
+    const rtIn =
+      Math.ceil(inAudioSec * 50) + Math.ceil(systemPromptChars / 4);
+    const rtOut =
+      Math.max(1, Math.ceil(finalText.length / 4)) +
+      Math.ceil(outAudioSec * 50);
+
+    const execIn = Math.ceil(this.executorUserChars / 4);
+    const execOut = Math.ceil(this.executorAssistantChars / 4);
+    const execPricing = PRICING[EXECUTOR_MODEL] ?? PRICING.default;
+    const executorCostUsd =
+      (execIn / 1e6) * execPricing.in + (execOut / 1e6) * execPricing.out;
+
+    const usage: Usage = {
+      inputTokens: rtIn,
+      outputTokens: rtOut,
+      inputAudioSec: inAudioSec,
+      outputAudioSec: outAudioSec,
+      extraCostUsd: executorCostUsd,
+      estimated: true,
+    };
+
     return {
       events: this.events,
       finalText,
-      usage: this.usage,
+      usage,
+      model: REALTIME_MODEL,
       ...(outputAudio ? { outputAudio } : {}),
     };
   }
@@ -269,6 +314,8 @@ export default class KazooAdapter implements AgentAdapter {
     this.assistantFinal = "";
     this.assistantPartial = "";
     this.audioChunks = [];
+    this.executorUserChars = 0;
+    this.executorAssistantChars = 0;
   }
 
   private async streamPcm(pcm: Uint8Array): Promise<void> {
@@ -383,7 +430,13 @@ export default class KazooAdapter implements AgentAdapter {
       case "assistant-text":
         // The worker's narration preamble. Useful context, not the spoken
         // final — that comes via the Realtime caption stream.
+        this.executorAssistantChars += (ev.text ?? "").length;
         this.emit({ type: "response.delta", t, text: ev.text });
+        return;
+      case "user-text":
+      case "delegate":
+        // Track executor input volume when the orchestrator surfaces it.
+        this.executorUserChars += String(ev.text ?? ev.prompt ?? "").length;
         return;
       case "turn-done":
         this.executorBusy = false;

@@ -129,7 +129,7 @@ export async function runScenario(scenarioDir: string, agentId: string) {
   }
 
   const score = scoreRun(scenario, trace, verifierResults);
-  const cost = computeCost(MODEL, trace.usage);
+  const cost = computeCost(trace.model ?? MODEL, trace.usage);
   recordCost(scenario.id, agentId, cost);
 
   const report = {

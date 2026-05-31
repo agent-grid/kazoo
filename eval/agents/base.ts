@@ -12,6 +12,18 @@ export interface Usage {
   outputTokens?: number;
   inputAudioSec?: number;
   outputAudioSec?: number;
+  /**
+   * Adapter-computed extra cost (USD) for components the harness can't price
+   * from the standard token fields — e.g. kazoo's separate Claude executor
+   * pass that runs alongside the OpenAI Realtime session. Added on top of
+   * computeCost's token-based estimate.
+   */
+  extraCostUsd?: number;
+  /**
+   * If true, inputTokens/outputTokens are heuristic estimates (e.g. char/4)
+   * rather than provider-reported. Recorded in report.json for auditability.
+   */
+  estimated?: boolean;
 }
 
 /** Provider-agnostic events. Every event carries a monotonic timestamp `t` (ms). */
@@ -51,6 +63,12 @@ export interface TurnTrace {
   usage: Usage;
   /** Raw PCM16 mono @ 24kHz — present only for `layer: "speech"` turns. */
   outputAudio?: Uint8Array;
+  /**
+   * Adapter-reported primary model id for pricing. The harness prefers this
+   * over its `MODEL` env when computing cost — so e.g. grok-voice runs are
+   * priced against xAI's grok model, not OpenAI's gpt-realtime default.
+   */
+  model?: string;
 }
 
 export interface AgentAdapter {

@@ -262,13 +262,21 @@ export default class GrokVoiceAdapter implements AgentAdapter {
         );
         break;
       case "response.done": {
-        const u = m.response?.usage;
+        // xAI's realtime dialect sometimes carries `usage` under different
+        // key shapes (input_tokens/output_tokens, prompt_tokens/completion_tokens,
+        // or a nested `details`). Try them in order, then fall back to a
+        // char/4 estimate at end-of-turn.
+        const u = m.response?.usage ?? m.usage;
         if (u) {
-          this.usage = {
-            inputTokens: u.input_tokens,
-            outputTokens: u.output_tokens,
-          };
-          this.emit({ type: "usage", t, usage: this.usage });
+          const inTok = u.input_tokens ?? u.prompt_tokens ?? u.input?.tokens;
+          const outTok = u.output_tokens ?? u.completion_tokens ?? u.output?.tokens;
+          if (inTok != null || outTok != null) {
+            this.usage = {
+              inputTokens: inTok,
+              outputTokens: outTok,
+            };
+            this.emit({ type: "usage", t, usage: this.usage });
+          }
         }
         const out: any[] = m.response?.output ?? [];
         // Fish a final text out of the response body if we don't already have one.
@@ -383,10 +391,28 @@ export default class GrokVoiceAdapter implements AgentAdapter {
         setTimeout(res, 1000);
       });
     }
+    // If xAI didn't surface usage on response.done (common today), estimate
+    // from the prompt + transcript using a 4 char/token heuristic. Flag the
+    // usage as estimated so report.json stays auditable. Audio output time
+    // (tracked via audio.output.chunk bytes) is folded in as ~50 tok/s, the
+    // rough realtime-audio token rate.
+    const usage = { ...this.usage };
+    if (usage.inputTokens == null && usage.outputTokens == null) {
+      const audioBytes = this.events
+        .filter((e) => e.type === "audio.output.chunk")
+        .reduce((n, e: any) => n + (e.bytes ?? 0), 0);
+      const audioSec = audioBytes / (24000 * 2);
+      usage.inputTokens = Math.max(1, Math.ceil(text.length / 4));
+      usage.outputTokens =
+        Math.max(1, Math.ceil(this.finalText.length / 4)) +
+        Math.ceil(audioSec * 50);
+      usage.estimated = true;
+    }
     return {
       events: this.events,
       finalText: this.finalText.trim(),
-      usage: this.usage,
+      usage,
+      model: this.model,
     };
   }
 
