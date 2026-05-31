@@ -166,10 +166,7 @@ export default class GrokVoiceAdapter implements AgentAdapter {
         // status and body and bake them into the rejection message.
         const wsMsg = e?.message ?? String(e);
         const detail = await probeUpgrade(url, apiKey).catch(() => null);
-        const suffix = detail
-          ? ` (HTTP ${detail.status}${detail.body ? `: ${detail.body}` : ""})`
-          : "";
-        rej(new Error("websocket upgrade failed: " + wsMsg + suffix));
+        rej(new Error(formatUpgradeError(wsMsg, detail)));
       });
     });
     this.ws.addEventListener("message", (ev: any) =>
@@ -400,6 +397,37 @@ export default class GrokVoiceAdapter implements AgentAdapter {
       /* ignore */
     }
   }
+}
+
+/**
+ * Translate a failed WebSocket upgrade into a clean, actionable error string.
+ * Recognizes common xAI failure modes (quota/billing, auth, not-found) so the
+ * harness surfaces something operators can act on instead of a raw protocol
+ * error. Falls back to the raw status+body when the cause is unrecognized.
+ */
+function formatUpgradeError(
+  wsMsg: string,
+  detail: { status: number; body: string } | null,
+): string {
+  if (!detail) return `grok-voice: websocket upgrade failed (${wsMsg})`;
+  const { status, body } = detail;
+  const bodyLc = body.toLowerCase();
+  const isQuota =
+    status === 429 ||
+    bodyLc.includes("resource has been exhausted") ||
+    bodyLc.includes("spending limit") ||
+    bodyLc.includes("monthly spending") ||
+    bodyLc.includes("available credits");
+  if (isQuota) {
+    return `grok-voice: xAI quota exhausted (HTTP ${status}) — purchase credits or raise your team's monthly spending limit at https://console.x.ai/`;
+  }
+  if (status === 401 || status === 403) {
+    return `grok-voice: xAI auth failed (HTTP ${status}) — check XAI_API_KEY and that your team has access to the realtime API`;
+  }
+  if (status === 404) {
+    return `grok-voice: xAI model/endpoint not found (HTTP 404) — verify VOICE_EVAL_GROK_MODEL`;
+  }
+  return `grok-voice: websocket upgrade failed (HTTP ${status}${body ? `: ${body}` : ""})`;
 }
 
 /**

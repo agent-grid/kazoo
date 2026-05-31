@@ -7,6 +7,7 @@ import { computeCost, estimateCost, recordCost } from "./cost";
 import type { AgentAdapter, CanonicalEvent, TurnTrace } from "../agents/base";
 import type { Scenario, VerifierResult } from "./scenario";
 import { judge } from "./judge";
+import { printAgentSummary, type RunOutcome } from "./report";
 import { c } from "./util/colors";
 import { pcm16ToWav, wavToPcm16 } from "./util/wav";
 import { synthesizePcm16 } from "./tts";
@@ -258,27 +259,35 @@ async function loadAgent(id: string): Promise<AgentAdapter> {
 
 /** Run every (scenario × agent) combination, then print a summary. */
 export async function runAll(scenarioDirs: string[], agentIds: string[]) {
-  const results: { scenario: string; agent: string; score: number; pass: boolean; error?: string }[] = [];
+  const results: RunOutcome[] = [];
   for (const dir of scenarioDirs) {
     for (const agent of agentIds) {
       try {
         const r = await runScenario(dir, agent);
-        results.push({ scenario: r.scenario, agent, score: r.score, pass: r.pass });
+        results.push({
+          scenario: r.scenario,
+          agent,
+          score: r.score,
+          pass: r.pass,
+          metrics: r.metrics,
+          cost_usd: r.cost_usd,
+        });
       } catch (e: any) {
         const error = String(e?.message ?? e);
         console.log(c.red(`  ✖ ${dir} × ${agent}: ${error}`));
-        results.push({ scenario: dir, agent, score: 0, pass: false, error });
+        // Use the scenario directory's basename as a best-effort scenario id.
+        const scenarioId = dir.split("/").pop() ?? dir;
+        results.push({ scenario: scenarioId, agent, score: 0, pass: false, error });
       }
     }
   }
-  console.log(c.bold("===== SUMMARY ====="));
+  // Per-run rollups (✓/✗ list) followed by the per-agent aggregate table.
+  console.log(c.bold("===== RUNS ====="));
   for (const r of results) {
-    const mark = r.pass ? c.green("✓") : c.red("✗");
-    const sc = (r.pass ? c.green : c.red)(`${r.score}/100`);
+    const mark = r.error ? c.red("⚠") : r.pass ? c.green("✓") : c.red("✗");
+    const sc = r.error ? c.red("ERR") : (r.pass ? c.green : c.red)(`${r.score}/100`);
     console.log(`  ${mark} ${r.scenario} ${c.dim("×")} ${r.agent}: ${sc}${r.error ? c.red(` (${r.error})`) : ""}`);
   }
-  const passed = results.filter((r) => r.pass).length;
-  const allPass = passed === results.length;
-  console.log(`  ${(allPass ? c.green : c.yellow)(`${passed}/${results.length} passed`)}\n`);
+  printAgentSummary(results);
   return results;
 }
