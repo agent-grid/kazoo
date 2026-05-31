@@ -44,12 +44,28 @@ describe('loadConfig — realtime model + reasoning_effort', () => {
     }
   })
 
+  it('uses `xhigh` (not `very-high`) as the documented top tier', () => {
+    // Guard against accidental drift back to the old wrong on-wire value.
+    expect(REALTIME_REASONING_EFFORTS).toContain('xhigh')
+    expect((REALTIME_REASONING_EFFORTS as readonly string[])).not.toContain('very-high')
+  })
+
   it('normalizes case (HIGH → high)', () => {
     const cfg = loadConfig({
       ...BASE_ENV,
       KAZOO_REALTIME_REASONING_EFFORT: 'HIGH',
     })
     expect(cfg.realtime.reasoningEffort).toBe('high')
+  })
+
+  it('aliases `very-high` → `xhigh` (the documented on-wire token)', () => {
+    for (const alias of ['very-high', 'VERY-HIGH', 'veryhigh', 'very_high']) {
+      const cfg = loadConfig({
+        ...BASE_ENV,
+        KAZOO_REALTIME_REASONING_EFFORT: alias,
+      })
+      expect(cfg.realtime.reasoningEffort).toBe('xhigh')
+    }
   })
 
   it('rejects an unknown effort value with a KazooError', () => {

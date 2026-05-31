@@ -8,18 +8,27 @@ import { KazooError } from './lib/errors.ts'
 import { resolveMemoryPaths } from './memory/store.ts'
 
 /** Per-session reasoning effort knob introduced by `gpt-realtime-2` (GA
- *  2026-05). Mirrors the Responses-API effort scale. The wire field name is
- *  `reasoning_effort` and lives directly on the `session` object in
- *  `session.update` (see `src/core/realtime/session.ts`). When unset we OMIT
- *  the field — backward-safe for any realtime model that doesn't accept it. */
-export const REALTIME_REASONING_EFFORTS = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'very-high',
-] as const
+ *  2026-05). Mirrors the Responses-API effort scale. The wire shape is
+ *  `reasoning: { effort: <level> }` NESTED under the `session` object on
+ *  `session.update` — NOT a flat `reasoning_effort` field (the server
+ *  silently drops that). See `src/core/realtime/session.ts`. When unset we
+ *  OMIT the nested object entirely — backward-safe for any realtime model
+ *  that doesn't accept the knob.
+ *
+ *  The documented top tier is `xhigh` (not `very-high`). We accept the more
+ *  intuitive `very-high` as an INPUT alias that normalizes to `xhigh`, but
+ *  the on-wire token is always `xhigh`. */
+export const REALTIME_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const
 export type RealtimeReasoningEffort = (typeof REALTIME_REASONING_EFFORTS)[number]
+
+/** Input aliases the operator may type in the env var. Normalized to the
+ *  on-wire token by `parseReasoningEffort`. Kept tiny on purpose — this is a
+ *  forgiving spelling, not a general translation table. */
+const REASONING_EFFORT_ALIASES: Record<string, RealtimeReasoningEffort> = {
+  'very-high': 'xhigh',
+  veryhigh: 'xhigh',
+  very_high: 'xhigh',
+}
 
 export type Config = {
   openaiApiKey: string
@@ -36,9 +45,11 @@ export type Config = {
     voice: string
     speed: number | undefined
     /** OpenAI `gpt-realtime-2` (GA 2026-05) added per-session reasoning effort.
-     *  Valid: minimal | low | medium | high | very-high. `undefined` means
-     *  "don't send the field" — keeps the wire payload backward-safe for any
-     *  realtime model that doesn't accept it. */
+     *  On-wire values: `minimal | low | medium | high | xhigh`. Operators may
+     *  also type the alias `very-high` (→ `xhigh`) in the env. `undefined`
+     *  means "don't send the nested `reasoning` object at all" — keeps the
+     *  wire payload backward-safe for any realtime model that doesn't accept
+     *  the knob. */
     reasoningEffort: RealtimeReasoningEffort | undefined
   }
   executor: {
@@ -130,14 +141,22 @@ function required(env: NodeJS.ProcessEnv, key: string): string {
 /** Parse + validate `KAZOO_REALTIME_REASONING_EFFORT`. Empty/unset → `low`
  *  (the snappy default for the narrator persona). An unrecognized value is a
  *  fail-fast `KazooError` rather than a silent fallback so a typo can't get
- *  shipped to OpenAI and rejected at session.update time. */
+ *  shipped to OpenAI and rejected at session.update time.
+ *
+ *  Accepts intuitive aliases (`very-high` / `veryhigh` / `very_high`) and
+ *  normalizes them to the documented on-wire token (`xhigh`). */
 function parseReasoningEffort(raw: string | undefined): RealtimeReasoningEffort | undefined {
   if (raw === undefined || raw === '') return 'low'
-  const lower = raw.toLowerCase() as RealtimeReasoningEffort
-  if ((REALTIME_REASONING_EFFORTS as readonly string[]).includes(lower)) return lower
+  const lower = raw.toLowerCase()
+  const aliased = REASONING_EFFORT_ALIASES[lower]
+  if (aliased !== undefined) return aliased
+  if ((REALTIME_REASONING_EFFORTS as readonly string[]).includes(lower)) {
+    return lower as RealtimeReasoningEffort
+  }
   throw new KazooError(
     'config/missing-env',
-    `KAZOO_REALTIME_REASONING_EFFORT must be one of ${REALTIME_REASONING_EFFORTS.join(' | ')}; got "${raw}"`,
+    `KAZOO_REALTIME_REASONING_EFFORT must be one of ${REALTIME_REASONING_EFFORTS.join(' | ')} ` +
+      `(alias: very-high → xhigh); got "${raw}"`,
   )
 }
 

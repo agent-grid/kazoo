@@ -104,10 +104,11 @@ export type RealtimeSessionArgs = {
    *  have already clamped to the API's [0.25, 1.5] window; omit to use the
    *  API default (1.0). */
   speed?: number
-  /** Maps to `reasoning_effort` on session.update. Only meaningful for
-   *  `gpt-realtime-2` (GA 2026-05); omitted from the wire payload when
-   *  `undefined`, which keeps `gpt-realtime` (the previous default) working
-   *  unchanged. The caller (`loadConfig()`) validates the enum. */
+  /** Maps to `reasoning.effort` (NESTED) on session.update. Only meaningful
+   *  for `gpt-realtime-2` (GA 2026-05); the whole nested `reasoning` object
+   *  is omitted when `undefined`, which keeps `gpt-realtime` (the previous
+   *  default) working unchanged. The caller (`loadConfig()`) validates the
+   *  enum and normalizes the `very-high` alias to the on-wire `xhigh`. */
   reasoningEffort?: RealtimeReasoningEffort
   instructions: string
   onEvent: RealtimeEventHandler
@@ -452,14 +453,18 @@ export class RealtimeSession {
         model: this.model,
         output_modalities: ['audio'],
         instructions: this.instructions,
-        // `gpt-realtime-2` (GA 2026-05) introduced `reasoning_effort` at the
-        // session level — same scale as the Responses API (minimal/low/medium/
-        // high/very-high). The field is omitted when `undefined`, which keeps
-        // the wire payload compatible with `gpt-realtime` (the previous
-        // default) for any operator who's still pinned to it. The valid set
-        // and default ("low") are enforced in `loadConfig()`.
+        // `gpt-realtime-2` (GA 2026-05) introduced per-session reasoning
+        // effort. The wire shape is NESTED — `reasoning: { effort: <level> }`
+        // — not a flat `reasoning_effort` field (the server silently drops
+        // that). On-wire values mirror the Responses API:
+        // `minimal | low | medium | high | xhigh`. The whole `reasoning`
+        // object is omitted when `undefined`, which keeps the payload
+        // compatible with `gpt-realtime` (the previous default) for any
+        // operator who's still pinned to it. The valid set, default ("low"),
+        // and the `very-high` → `xhigh` alias are all enforced in
+        // `loadConfig()`.
         ...(this.reasoningEffort !== undefined
-          ? { reasoning_effort: this.reasoningEffort }
+          ? { reasoning: { effort: this.reasoningEffort } }
           : {}),
         // SUPERVISOR_SPEC §2c/§2d. The model decides answer-vs-delegate-vs-stop
         // itself via these two tools; the orchestrator only forwards the
